@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "https://caresight.onrender.com";
 const LABELS = {
   age: "Age", bmi: "BMI", glucose: "Fasting glucose", hba1c: "HbA1c",
   systolic_bp: "Systolic BP", smoker: "Smoker", family_history: "Family history",
