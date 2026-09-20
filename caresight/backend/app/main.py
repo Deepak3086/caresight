@@ -89,8 +89,7 @@ def require(*roles):
 
 
 app = FastAPI(title="CareSight")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=allow_origins=[o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()],)
 
 
 @app.on_event("startup")
