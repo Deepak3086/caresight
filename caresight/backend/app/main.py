@@ -117,6 +117,7 @@ def require(*roles):
 app = FastAPI(title="CareSight")
 app.add_middleware(CORSMiddleware,
                    allow_origins=[o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()],
+                   allow_origin_regex=r"^https://caresight-[a-z0-9]+-itsdeepak0308-2474s-projects\.vercel\.app$",
                    allow_methods=["*"], allow_headers=["*"])
 
 
