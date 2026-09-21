@@ -42,6 +42,53 @@ function Factors({ factors }) {
   );
 }
 
+function errText(d) {
+  if (Array.isArray(d)) return d.map((e) => `${e.loc?.slice(-1)[0] ?? ""}: ${e.msg}`).join("; ");
+  return d || "Request failed";
+}
+
+const Num = ({ name, label, min, max }) => (
+  <label>{label}<input name={name} type="number" step="any" min={min} max={max} required /></label>
+);
+
+function Detail({ selected, risk, error }) {
+  return (
+    <main className="detail">
+      {error && <p className="error" role="alert">{error}</p>}
+      {!selected && <p className="empty">Select a patient to see their risk score and what drives it.</p>}
+      {selected && (
+        <>
+          <h2>{selected.name}</h2>
+          <p className="muted">{selected.age} years old</p>
+          <dl className="vitals">
+            {[["BMI", selected.bmi, ""], ["Fasting glucose", selected.glucose, "mg/dL"], ["HbA1c", selected.hba1c, "%"],
+              ["Systolic BP", selected.systolic_bp, "mmHg"], ["Smoker", yesNo(selected.smoker), ""],
+              ["Family history", yesNo(selected.family_history), ""]].map(([k, v, u]) => (
+              <div key={k}><dt>{k}</dt><dd>{v} <small>{u}</small></dd></div>
+            ))}
+          </dl>
+          {!risk && !error && <p className="muted">Scoring {selected.name}...</p>}
+          {risk && (
+            <>
+              <section className="verdict">
+                <Gauge score={risk.score} level={risk.level} />
+                <div>
+                  <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
+                  <p className="muted">Estimated from age, BMI, glucose, HbA1c, blood pressure, smoking and family history.</p>
+                </div>
+              </section>
+              <h3>What moved this score</h3>
+              <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
+              <Factors factors={risk.factors} />
+              <p className="note">{risk.disclaimer}</p>
+            </>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
 export default function App() {
   const [auth, setAuth] = useState(null);
   const [patients, setPatients] = useState([]);
@@ -51,6 +98,8 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState("signin");
+  const [role, setRole] = useState("patient");
 
   const signOut = (msg = "") => {
     setAuth(null); setPatients([]); setSelected(null); setRisk(null);
@@ -67,21 +116,47 @@ export default function App() {
       signOut("Your session expired. Sign in again.");
       throw new Error("expired");
     }
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Request failed");
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(errText(d.detail));
+    }
     return res.json();
   };
 
-  const login = async (e) => {
+  const enter = async (a) => {
+    setAuth(a);
+    if (a.role === "patient") {
+      setSelected(await call("/me/patient", {}, a.token));
+      setRisk(await call("/me/risk", {}, a.token));
+    } else {
+      setPatients(await call("/patients", {}, a.token));
+    }
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     setBusy(true); setError("");
     try {
-      const a = await call("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username: f.get("username"), password: f.get("password") }),
-      }, null);
-      setAuth(a);
-      setPatients(await call("/patients", {}, a.token));
+      let a;
+      if (mode === "signin") {
+        a = await call("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username: f.get("username"), password: f.get("password") }),
+        }, null);
+      } else {
+        const body = { username: f.get("username"), password: f.get("password"), role };
+        if (role === "patient") {
+          body.name = f.get("name");
+          body.profile = {
+            age: +f.get("age"), bmi: +f.get("bmi"), glucose: +f.get("glucose"),
+            hba1c: +f.get("hba1c"), systolic_bp: +f.get("systolic_bp"),
+            smoker: f.get("smoker") ? 1 : 0, family_history: f.get("family_history") ? 1 : 0,
+          };
+        }
+        a = await call("/auth/register", { method: "POST", body: JSON.stringify(body) }, null);
+      }
+      await enter(a);
     } catch (err) { fail(err); }
     finally { setBusy(false); }
   };
@@ -104,13 +179,51 @@ export default function App() {
           <p>Review a patient, see their estimated cardiometabolic risk, and see which measurements pushed it up or down.</p>
         </aside>
         <main>
-          <form onSubmit={login}>
-            <h2>Sign in</h2>
-            <p className="muted">The demo login is filled in. All patient data is synthetic.</p>
-            <label>Username<input name="username" defaultValue="doctor" autoComplete="username" /></label>
-            <label>Password<input name="password" type="password" defaultValue="doctor123" autoComplete="current-password" /></label>
-            <button className="primary" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</button>
-            {busy && <p className="muted">The demo server sleeps when idle, so the first sign-in can take up to a minute.</p>}
+          <form key={mode} onSubmit={submit}>
+            <div className="tabs" role="tablist">
+              <button type="button" role="tab" aria-selected={mode === "signin"} className={mode === "signin" ? "on" : ""}
+                onClick={() => { setMode("signin"); setError(""); }}>Sign in</button>
+              <button type="button" role="tab" aria-selected={mode === "signup"} className={mode === "signup" ? "on" : ""}
+                onClick={() => { setMode("signup"); setError(""); }}>Create account</button>
+            </div>
+            {mode === "signin" ? (
+              <>
+                <p className="muted">The demo login is filled in. All patient data is synthetic.</p>
+                <label>Username<input name="username" defaultValue="doctor" autoComplete="username" required /></label>
+                <label>Password<input name="password" type="password" defaultValue="doctor123" autoComplete="current-password" required /></label>
+              </>
+            ) : (
+              <>
+                <div className="roles" role="radiogroup" aria-label="Account type">
+                  {[["patient", "I'm a patient"], ["doctor", "I'm a doctor"]].map(([r, text]) => (
+                    <label key={r} className={role === r ? "on" : ""}>
+                      <input type="radio" name="role" value={r} checked={role === r} onChange={() => setRole(r)} />{text}
+                    </label>
+                  ))}
+                </div>
+                <p className="muted">This is a demo. Please don't enter real health information.</p>
+                <label>Username<input name="username" minLength={3} maxLength={30} autoComplete="username" required /></label>
+                <label>Password (8 characters or more)<input name="password" type="password" minLength={8} autoComplete="new-password" required /></label>
+                {role === "patient" && (
+                  <>
+                    <label>Full name<input name="name" maxLength={80} required /></label>
+                    <div className="grid2">
+                      <Num name="age" label="Age" min={0} max={120} />
+                      <Num name="bmi" label="BMI" min={10} max={80} />
+                      <Num name="glucose" label="Fasting glucose (mg/dL)" min={30} max={600} />
+                      <Num name="hba1c" label="HbA1c (%)" min={3} max={18} />
+                      <Num name="systolic_bp" label="Systolic BP (mmHg)" min={60} max={260} />
+                    </div>
+                    <label className="check"><input type="checkbox" name="smoker" /> I smoke</label>
+                    <label className="check"><input type="checkbox" name="family_history" /> Family history of heart disease or diabetes</label>
+                  </>
+                )}
+              </>
+            )}
+            <button className="primary" disabled={busy}>
+              {busy ? (mode === "signin" ? "Signing in..." : "Creating account...") : (mode === "signin" ? "Sign in" : "Create account")}
+            </button>
+            {busy && <p className="muted">The demo server sleeps when idle, so this can take up to a minute.</p>}
             {error && <p className="error" role="alert">{error}</p>}
           </form>
         </main>
@@ -121,7 +234,7 @@ export default function App() {
   const list = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
 
   return (
-    <div className="app">
+    <div className={`app ${auth.role === "patient" ? "solo" : ""}`}>
       <header>
         <div className="brand"><Pulse /> CareSight</div>
         <div className="who-am-i">
@@ -130,6 +243,7 @@ export default function App() {
         </div>
       </header>
 
+      {auth.role !== "patient" && (
       <nav className="roster" aria-label="Patients">
         <input type="search" placeholder="Search patients" value={query}
           onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
@@ -149,40 +263,9 @@ export default function App() {
           {list.length === 0 && <li className="muted pad">No patients match "{query}".</li>}
         </ul>
       </nav>
+      )}
 
-      <main className="detail">
-        {error && <p className="error" role="alert">{error}</p>}
-        {!selected && <p className="empty">Select a patient to see their risk score and what drives it.</p>}
-        {selected && (
-          <>
-            <h2>{selected.name}</h2>
-            <p className="muted">{selected.age} years old</p>
-            <dl className="vitals">
-              {[["BMI", selected.bmi, ""], ["Fasting glucose", selected.glucose, "mg/dL"], ["HbA1c", selected.hba1c, "%"],
-                ["Systolic BP", selected.systolic_bp, "mmHg"], ["Smoker", yesNo(selected.smoker), ""],
-                ["Family history", yesNo(selected.family_history), ""]].map(([k, v, u]) => (
-                <div key={k}><dt>{k}</dt><dd>{v} <small>{u}</small></dd></div>
-              ))}
-            </dl>
-            {!risk && !error && <p className="muted">Scoring {selected.name}...</p>}
-            {risk && (
-              <>
-                <section className="verdict">
-                  <Gauge score={risk.score} level={risk.level} />
-                  <div>
-                    <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
-                    <p className="muted">Estimated from age, BMI, glucose, HbA1c, blood pressure, smoking and family history.</p>
-                  </div>
-                </section>
-                <h3>What moved this score</h3>
-                <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
-                <Factors factors={risk.factors} />
-                <p className="note">{risk.disclaimer}</p>
-              </>
-            )}
-          </>
-        )}
-      </main>
+      <Detail selected={selected} risk={risk} error={error} />
     </div>
   );
 }

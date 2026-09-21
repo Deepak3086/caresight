@@ -1,6 +1,7 @@
 """CareSight API: JWT auth, role-based access, audit log, risk prediction."""
 import hashlib, hmac, os, secrets
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import jwt
 from fastapi import Depends, FastAPI, HTTPException
@@ -8,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from . import ml
@@ -26,7 +28,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
-    role: Mapped[str] = mapped_column(String)  # doctor | admin
+    role: Mapped[str] = mapped_column(String)  # doctor | admin | patient
+    full_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Patient(Base):
@@ -40,6 +43,7 @@ class Patient(Base):
     systolic_bp: Mapped[float] = mapped_column(Float)
     smoker: Mapped[int] = mapped_column(Integer)
     family_history: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, unique=True)
 
 
 class AuditLog(Base):
@@ -93,6 +97,7 @@ app.add_middleware(CORSMiddleware,
                    allow_origins=[o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()],
                    allow_methods=["*"], allow_headers=["*"])
 
+
 @app.on_event("startup")
 def seed():
     Base.metadata.create_all(engine)
@@ -111,8 +116,7 @@ class Login(BaseModel):
     password: str
 
 
-class PatientIn(BaseModel):
-    name: str
+class Vitals(BaseModel):
     age: int = Field(ge=0, le=120)
     bmi: float = Field(ge=10, le=80)
     glucose: float = Field(ge=30, le=600)
@@ -122,19 +126,78 @@ class PatientIn(BaseModel):
     family_history: int = Field(ge=0, le=1)
 
 
+class PatientIn(Vitals):
+    name: str
+
+
+class Register(BaseModel):
+    username: str = Field(min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=8, max_length=128)
+    role: Literal["doctor", "patient"]  # admin accounts can never be self-created
+    name: str | None = Field(default=None, max_length=80)
+    profile: Vitals | None = None
+
+
 def log(s: Session, user: User, action: str, patient_id: int | None = None):
     s.add(AuditLog(user_id=user.id, action=action, patient_id=patient_id))
     s.commit()
 
 
-@app.post("/auth/login")
-def login(body: Login, s: Session = Depends(db)):
-    user = s.scalar(select(User).where(User.username == body.username))
-    if not user or not check_pw(body.password, user.password_hash):
-        raise HTTPException(401, "Wrong username or password")
+def issue(user: User) -> dict:
     exp = datetime.now(timezone.utc) + timedelta(hours=8)
     token = jwt.encode({"sub": str(user.id), "role": user.role, "exp": exp}, SECRET, algorithm="HS256")
     return {"token": token, "role": user.role, "username": user.username}
+
+
+@app.post("/auth/login")
+def login(body: Login, s: Session = Depends(db)):
+    user = s.scalar(select(User).where(User.username == body.username.lower()))
+    if not user or not check_pw(body.password, user.password_hash):
+        raise HTTPException(401, "Wrong username or password")
+    return issue(user)
+
+
+@app.post("/auth/register", status_code=201)
+def register(body: Register, s: Session = Depends(db)):
+    if body.role == "patient" and not (body.name and body.name.strip() and body.profile):
+        raise HTTPException(422, "Patients must give their name and measurements")
+    user = User(username=body.username.lower(), password_hash=hash_pw(body.password),
+                role=body.role, full_name=body.name)
+    s.add(user)
+    try:
+        s.flush()
+        if body.role == "patient":
+            s.add(Patient(name=body.name.strip(), user_id=user.id, **body.profile.model_dump()))
+        s.commit()
+    except IntegrityError:
+        s.rollback()
+        raise HTTPException(409, "That username is taken")
+    log(s, user, "register")
+    return issue(user)
+
+
+def risk_payload(p: Patient) -> dict:
+    return {"patient_id": p.id, **ml.predict({f: getattr(p, f) for f in ml.FEATURES}),
+            "disclaimer": "Decision support demo on synthetic data. Not a diagnosis."}
+
+
+def own_record(user: User, s: Session) -> Patient:
+    p = s.scalar(select(Patient).where(Patient.user_id == user.id))
+    if not p:
+        raise HTTPException(404, "No patient record for this account")
+    return p
+
+
+@app.get("/me/patient")
+def my_patient(user: User = Depends(require("patient")), s: Session = Depends(db)):
+    return own_record(user, s)
+
+
+@app.get("/me/risk")
+def my_risk(user: User = Depends(require("patient")), s: Session = Depends(db)):
+    p = own_record(user, s)
+    log(s, user, "view_own_risk", p.id)
+    return risk_payload(p)
 
 
 @app.get("/patients")
@@ -158,8 +221,7 @@ def patient_risk(pid: int, user: User = Depends(require("doctor")), s: Session =
     if not p:
         raise HTTPException(404, "Patient not found")
     log(s, user, "view_risk", pid)
-    return {"patient_id": pid, **ml.predict({f: getattr(p, f) for f in ml.FEATURES}),
-            "disclaimer": "Decision support demo on synthetic data. Not a diagnosis."}
+    return risk_payload(p)
 
 
 @app.get("/audit")
