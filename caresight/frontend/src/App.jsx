@@ -52,41 +52,69 @@ const Num = ({ name, label, min, max }) => (
   <label>{label}<input name={name} type="number" step="any" min={min} max={max} required /></label>
 );
 
-function Detail({ selected, risk, error }) {
+const RANGES = {
+  hba1c: { label: "HbA1c", unit: "%", min: 4, max: 10, cuts: [5.7, 6.5] },
+  glucose: { label: "Blood glucose", unit: "mg/dL", min: 60, max: 300, cuts: [140, 200] },
+  bmi: { label: "BMI", unit: "kg/m²", min: 15, max: 45, cuts: [25, 30] },
+};
+
+function Range({ value, min, max, cuts }) {
+  const at = (v) => Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100));
+  const [x, y] = cuts.map(at);
   return (
-    <main className="detail">
+    <div className="strip" aria-hidden="true">
+      <i style={{ width: `${x}%` }} /><i style={{ width: `${y - x}%` }} /><i style={{ width: `${100 - y}%` }} />
+      <b style={{ left: `${at(value)}%` }} />
+    </div>
+  );
+}
+
+function Detail({ selected, risk, error, onModel }) {
+  return (
+    <div className="detail">
       {error && <p className="error" role="alert">{error}</p>}
-      {!selected && <p className="empty">Select a patient to see their risk score and what drives it.</p>}
+      {!selected && <p className="empty">Select a patient from the list to see their screening result and what drives it.</p>}
       {selected && (
         <>
           <h2>{selected.name}</h2>
           <p className="muted">{selected.age} years old, {selected.sex}</p>
-          <dl className="vitals">
-            {[["BMI", selected.bmi, ""], ["Blood glucose", selected.glucose, "mg/dL"], ["HbA1c", selected.hba1c, "%"],
-              ["Hypertension", yesNo(selected.hypertension), ""], ["Heart disease", yesNo(selected.heart_disease), ""],
-              ["Smoking", show("smoking", selected.smoking), ""]].map(([k, v, u]) => (
-              <div key={k}><dt>{k}</dt><dd>{v} <small>{u}</small></dd></div>
+          <section className="tiles">
+            {Object.entries(RANGES).map(([k, r]) => (
+              <div className="tile" key={k}>
+                <div><b>{r.label}</b><small>{r.unit}</small></div>
+                <span className="val">{selected[k]}</span>
+                <Range value={selected[k]} {...r} />
+              </div>
             ))}
-          </dl>
+          </section>
+          <section className="facts">
+            {[["Hypertension", yesNo(selected.hypertension)], ["Heart disease", yesNo(selected.heart_disease)],
+              ["Smoking", show("smoking", selected.smoking)]].map(([k, v]) => <div key={k}><small>{k}</small><b>{v}</b></div>)}
+          </section>
           {!risk && !error && <p className="muted">Scoring {selected.name}...</p>}
           {risk && (
-            <>
-              <section className="verdict">
+            <section className="cards">
+              <div className="card verdict">
+                <h3>Screening result</h3>
                 <Gauge score={risk.score} level={risk.level} />
-                <div>
-                  <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
-                  <p className="muted">How closely this record resembles diabetes cases in the training data, from age, sex, BMI, blood glucose, HbA1c, hypertension, heart disease and smoking.</p>
-                </div>
-              </section>
-              <h3>What moved this score</h3>
-              <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
-              <Factors factors={risk.factors} />
-              <p className="note">{risk.disclaimer}</p>
-            </>
+                <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
+                <p className="muted">How closely this record resembles diabetes cases in the training data.</p>
+              </div>
+              <div className="card">
+                <h3>What moved this score</h3>
+                <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
+                <Factors factors={risk.factors} />
+              </div>
+            </section>
           )}
+          <section className="cta">
+            <div><h3>See how the model works</h3><p>Compared models, test results and known limits.</p></div>
+            <button onClick={onModel}>About the model</button>
+          </section>
+          {risk && <p className="note">{risk.disclaimer}</p>}
         </>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -94,7 +122,7 @@ function Admin({ data, onAdd, error }) {
   const licenses = data?.licenses ?? [];
   const audit = data?.audit ?? [];
   return (
-    <main className="detail">
+    <div className="detail panel">
       <h2>Doctor registry</h2>
       <p className="muted">A doctor can only create an account with an unused ID and the matching name.</p>
       {error && <p className="error" role="alert">{error}</p>}
@@ -120,7 +148,7 @@ function Admin({ data, onAdd, error }) {
           </li>
         ))}
       </ul>
-    </main>
+    </div>
   );
 }
 
@@ -130,7 +158,7 @@ function ModelCard({ card }) {
   const drivers = Object.entries(card.importance).sort((a, b) => b[1] - a[1]);
   const top = Math.max(...drivers.map(([, v]) => v), 0.0001);
   return (
-    <main className="detail mc">
+    <div className="detail mc panel">
       <h2>About the model</h2>
       <p className="muted">
         Trained on the public Kaggle "Diabetes prediction dataset": {card.dataset.rows.toLocaleString()} records after
@@ -178,7 +206,7 @@ function ModelCard({ card }) {
         <li>Blood pressure, family history and other known risk factors are not in the data.</li>
         <li>Screening demo only. Not for medical decisions.</li>
       </ul>
-    </main>
+    </div>
   );
 }
 
@@ -277,8 +305,7 @@ export default function App() {
     } catch (err) { fail(err); }
   };
 
-  const toggleModel = async () => {
-    if (view === "model") return setView("app");
+  const showModel = async () => {
     setError("");
     try {
       if (!card) setCard(await call("/model"));
@@ -366,45 +393,74 @@ export default function App() {
 
   const list = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
 
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const name = auth.username[0].toUpperCase() + auth.username.slice(1);
+  const sub = view === "model" ? "How the screening model was built and tested."
+    : auth.role === "doctor" ? "Select a patient to review their screening result."
+    : auth.role === "admin" ? "Manage the doctor registry and review activity."
+    : "Here is your latest screening result.";
+
   return (
-    <div className={`app ${auth.role !== "doctor" ? "solo" : ""}`}>
-      <header>
-        <div className="brand"><Pulse /> CareSight</div>
-        <div className="who-am-i">
-          <span>{auth.username} <small>({auth.role})</small></span>
-          <button className="ghost" onClick={toggleModel}>{view === "model" ? "Back" : "About the model"}</button>
-          <button className="ghost" onClick={() => signOut()}>Sign out</button>
+    <div className="stage">
+      <div className="glass">
+        <nav className="rail" aria-label="Main">
+          <span className="logo"><Pulse /></span>
+          <button className={`rail-btn ${view === "app" ? "on" : ""}`} onClick={() => setView("app")} aria-label="Dashboard" title="Dashboard"><Grid /></button>
+          <button className={`rail-btn ${view === "model" ? "on" : ""}`} onClick={showModel} aria-label="About the model" title="About the model"><Chart /></button>
+        </nav>
+        <div className="body">
+          <header className="topbar">
+            <div><h1>Good {part}, {name}</h1><p className="muted">{sub}</p></div>
+            <div className="me">
+              <span className="avatar" aria-hidden="true">{name[0]}</span>
+              <span>{auth.username} <small>({auth.role})</small></span>
+              <button className="ghost" onClick={() => signOut()}>Sign out</button>
+            </div>
+          </header>
+          <div className={`content ${auth.role === "doctor" ? "with-roster" : ""}`}>
+            {auth.role === "doctor" && (
+              <nav className="roster" aria-label="Patients">
+                <input type="search" placeholder="Search patients" value={query}
+                  onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
+                <ul>
+                  {list.map((p) => {
+                    const sc = scores[p.id];
+                    return (
+                      <li key={p.id}>
+                        <button className={`row ${selected?.id === p.id ? "on" : ""}`} onClick={() => { setView("app"); assess(p); }}
+                          aria-current={selected?.id === p.id}>
+                          <span className="who"><b>{p.name}</b><small>{p.age} years, BMI {p.bmi}</small></span>
+                          <span className={`chip ${sc ? sc.level : "none"}`}>{sc ? `${Math.round(sc.score * 100)}%` : "Not assessed"}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                  {list.length === 0 && <li className="muted pad">No patients match "{query}".</li>}
+                </ul>
+              </nav>
+            )}
+            <main className="main">
+              {view === "model" ? <ModelCard card={card} />
+                : auth.role === "admin" ? <Admin data={admin} onAdd={addLicense} error={error} />
+                : <Detail selected={selected} risk={risk} error={error} onModel={showModel} />}
+            </main>
+          </div>
         </div>
-      </header>
-
-      {auth.role === "doctor" && (
-      <nav className="roster" aria-label="Patients">
-        <input type="search" placeholder="Search patients" value={query}
-          onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
-        <ul>
-          {list.map((p) => {
-            const s = scores[p.id];
-            return (
-              <li key={p.id}>
-                <button className={`row ${selected?.id === p.id ? "on" : ""}`} onClick={() => assess(p)}
-                  aria-current={selected?.id === p.id}>
-                  <span className="who"><b>{p.name}</b><small>{p.age} years, BMI {p.bmi}</small></span>
-                  <span className={`chip ${s ? s.level : "none"}`}>{s ? `${Math.round(s.score * 100)}%` : "Not assessed"}</span>
-                </button>
-              </li>
-            );
-          })}
-          {list.length === 0 && <li className="muted pad">No patients match "{query}".</li>}
-        </ul>
-      </nav>
-      )}
-
-      {view === "model" ? <ModelCard card={card} />
-        : auth.role === "admin" ? <Admin data={admin} onAdd={addLicense} error={error} />
-        : <Detail selected={selected} risk={risk} error={error} />}
+      </div>
     </div>
   );
 }
+
+const Svg = ({ children }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+);
+const Grid = () => (
+  <Svg><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" />
+    <rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></Svg>
+);
+const Chart = () => <Svg><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></Svg>;
 
 function Pulse() {
   return (
