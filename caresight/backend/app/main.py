@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, create_engine, select
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, create_engine, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -53,6 +53,27 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String)
     patient_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class DoctorLicense(Base):
+    """Registry of verified doctors. One ID can be claimed by exactly one account."""
+    __tablename__ = "doctor_licenses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    license_id: Mapped[str] = mapped_column(String, unique=True)
+    full_name: Mapped[str] = mapped_column(String)
+    claimed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, unique=True)
+
+
+DEMO_LICENSES = [("DOC-1001", "Asha Rao"), ("DOC-1002", "Vikram Nair"), ("DOC-1003", "Meera Iyer"),
+                 ("DOC-1004", "Rahul Menon"), ("DOC-1005", "Priya Sharma")]
+
+
+def norm_name(x: str) -> str:
+    x = " ".join(x.lower().split())
+    for prefix in ("dr. ", "dr "):
+        if x.startswith(prefix):
+            x = x[len(prefix):]
+    return x
 
 
 def hash_pw(pw: str, salt: bytes | None = None) -> str:
@@ -102,6 +123,9 @@ app.add_middleware(CORSMiddleware,
 def seed():
     Base.metadata.create_all(engine)
     with Session(engine) as s:
+        if not s.scalar(select(DoctorLicense)):
+            s.add_all([DoctorLicense(license_id=i, full_name=n) for i, n in DEMO_LICENSES])
+            s.commit()
         if s.scalar(select(User)):
             return
         s.add_all([User(username="doctor", password_hash=hash_pw("doctor123"), role="doctor"),
@@ -136,6 +160,7 @@ class Register(BaseModel):
     role: Literal["doctor", "patient"]  # admin accounts can never be self-created
     name: str | None = Field(default=None, max_length=80)
     profile: Vitals | None = None
+    license_id: str | None = Field(default=None, max_length=30)
 
 
 def log(s: Session, user: User, action: str, patient_id: int | None = None):
@@ -161,11 +186,24 @@ def login(body: Login, s: Session = Depends(db)):
 def register(body: Register, s: Session = Depends(db)):
     if body.role == "patient" and not (body.name and body.name.strip() and body.profile):
         raise HTTPException(422, "Patients must give their name and measurements")
+    lic = None
+    if body.role == "doctor":
+        lic = s.scalar(select(DoctorLicense).where(DoctorLicense.license_id == (body.license_id or "").strip().upper()))
+        if not (lic and lic.claimed_by is None and body.name and norm_name(body.name) == norm_name(lic.full_name)):
+            # one message for every failure, so IDs can't be probed one by one
+            raise HTTPException(403, "We couldn't verify that ID and name, or the ID is already in use.")
     user = User(username=body.username.lower(), password_hash=hash_pw(body.password),
                 role=body.role, full_name=body.name)
     s.add(user)
     try:
         s.flush()
+        if lic:
+            claimed = s.execute(update(DoctorLicense)
+                                .where(DoctorLicense.id == lic.id, DoctorLicense.claimed_by.is_(None))
+                                .values(claimed_by=user.id))
+            if claimed.rowcount != 1:  # someone else claimed it a moment ago
+                s.rollback()
+                raise HTTPException(403, "We couldn't verify that ID and name, or the ID is already in use.")
         if body.role == "patient":
             s.add(Patient(name=body.name.strip(), user_id=user.id, **body.profile.model_dump()))
         s.commit()
@@ -233,3 +271,26 @@ def audit(user: User = Depends(require("admin")), s: Session = Depends(db)):
 @app.get("/model")
 def model_info(user: User = Depends(current_user)):
     return ml.model_metrics()
+
+
+class LicenseIn(BaseModel):
+    license_id: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
+    full_name: str = Field(min_length=2, max_length=80)
+
+
+@app.get("/admin/licenses")
+def list_licenses(user: User = Depends(require("admin")), s: Session = Depends(db)):
+    rows = s.scalars(select(DoctorLicense).order_by(DoctorLicense.id)).all()
+    return [{"license_id": r.license_id, "full_name": r.full_name, "claimed": r.claimed_by is not None} for r in rows]
+
+
+@app.post("/admin/licenses", status_code=201)
+def add_license(body: LicenseIn, user: User = Depends(require("admin")), s: Session = Depends(db)):
+    s.add(DoctorLicense(license_id=body.license_id.upper(), full_name=body.full_name.strip()))
+    try:
+        s.commit()
+    except IntegrityError:
+        s.rollback()
+        raise HTTPException(409, "That ID is already in the registry")
+    log(s, user, "add_license")
+    return {"ok": True}

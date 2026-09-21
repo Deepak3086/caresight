@@ -36,3 +36,8 @@ Demo logins: `doctor / doctor123` and `admin / admin123`. Set `JWT_SECRET` outsi
 - Built a role-based clinical dashboard (FastAPI, React, SQLAlchemy) serving patient risk scores with per-patient explanations.
 - Trained and evaluated a gradient-boosted classifier (AUC 0.73 on a held-out synthetic set) behind a REST inference API.
 - Implemented JWT authentication, RBAC and audit logging to mirror healthcare data-access requirements.
+
+## Doctor verification
+Doctor accounts can't be created freely. Sign-up needs a registration ID from the doctor registry plus the matching
+name, and each ID can be claimed by one account only. Admins manage the registry in the app. The seeded demo IDs are
+`DOC-1001` (Asha Rao) to `DOC-1005`. A production version would check an official medical register instead.

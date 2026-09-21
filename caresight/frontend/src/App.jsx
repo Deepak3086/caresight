@@ -89,6 +89,40 @@ function Detail({ selected, risk, error }) {
   );
 }
 
+function Admin({ data, onAdd, error }) {
+  const licenses = data?.licenses ?? [];
+  const audit = data?.audit ?? [];
+  return (
+    <main className="detail">
+      <h2>Doctor registry</h2>
+      <p className="muted">A doctor can only create an account with an unused ID and the matching name.</p>
+      {error && <p className="error" role="alert">{error}</p>}
+      <form className="inline" onSubmit={onAdd}>
+        <label>Registration ID<input name="license_id" required minLength={4} maxLength={30} /></label>
+        <label>Doctor's full name<input name="full_name" required maxLength={80} /></label>
+        <button className="primary">Add to registry</button>
+      </form>
+      <ul className="registry">
+        {licenses.map((l) => (
+          <li key={l.license_id}>
+            <b>{l.license_id}</b><span>{l.full_name}</span>
+            <span className={`chip ${l.claimed ? "moderate" : "low"}`}>{l.claimed ? "In use" : "Available"}</span>
+          </li>
+        ))}
+      </ul>
+      <h3>Recent activity</h3>
+      <ul className="activity">
+        {audit.slice(0, 15).map((a, i) => (
+          <li key={i}>
+            <span>{a.action.replaceAll("_", " ")}{a.patient_id ? ` (patient ${a.patient_id})` : ""}</span>
+            <span className="muted">user {a.user_id}, {String(a.at).slice(0, 16).replace("T", " ")} UTC</span>
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}
+
 export default function App() {
   const [auth, setAuth] = useState(null);
   const [patients, setPatients] = useState([]);
@@ -100,10 +134,11 @@ export default function App() {
   const [error, setError] = useState("");
   const [mode, setMode] = useState("signin");
   const [role, setRole] = useState("patient");
+  const [admin, setAdmin] = useState(null);
 
   const signOut = (msg = "") => {
     setAuth(null); setPatients([]); setSelected(null); setRisk(null);
-    setScores({}); setQuery(""); setError(msg);
+    setScores({}); setQuery(""); setAdmin(null); setError(msg);
   };
   const fail = (err) => { if (err.message !== "expired") setError(err.message); };
 
@@ -128,6 +163,8 @@ export default function App() {
     if (a.role === "patient") {
       setSelected(await call("/me/patient", {}, a.token));
       setRisk(await call("/me/risk", {}, a.token));
+    } else if (a.role === "admin") {
+      setAdmin({ licenses: await call("/admin/licenses", {}, a.token), audit: await call("/audit", {}, a.token) });
     } else {
       setPatients(await call("/patients", {}, a.token));
     }
@@ -153,12 +190,30 @@ export default function App() {
             hba1c: +f.get("hba1c"), systolic_bp: +f.get("systolic_bp"),
             smoker: f.get("smoker") ? 1 : 0, family_history: f.get("family_history") ? 1 : 0,
           };
+        } else {
+          body.name = f.get("name");
+          body.license_id = f.get("license_id");
         }
         a = await call("/auth/register", { method: "POST", body: JSON.stringify(body) }, null);
       }
       await enter(a);
     } catch (err) { fail(err); }
     finally { setBusy(false); }
+  };
+
+  const addLicense = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const f = new FormData(form);
+    setError("");
+    try {
+      await call("/admin/licenses", {
+        method: "POST",
+        body: JSON.stringify({ license_id: f.get("license_id"), full_name: f.get("full_name") }),
+      });
+      setAdmin({ ...admin, licenses: await call("/admin/licenses") });
+      form.reset();
+    } catch (err) { fail(err); }
   };
 
   const assess = async (p) => {
@@ -218,6 +273,13 @@ export default function App() {
                     <label className="check"><input type="checkbox" name="family_history" /> Family history of heart disease or diabetes</label>
                   </>
                 )}
+                {role === "doctor" && (
+                  <>
+                    <label>Full name (as on your registration)<input name="name" maxLength={80} required /></label>
+                    <label>Medical registration ID<input name="license_id" maxLength={30} required /></label>
+                    <p className="muted">Demo: use ID DOC-1001 with the name Dr. Asha Rao. Real sign-ups would be checked against an official medical register.</p>
+                  </>
+                )}
               </>
             )}
             <button className="primary" disabled={busy}>
@@ -234,7 +296,7 @@ export default function App() {
   const list = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
 
   return (
-    <div className={`app ${auth.role === "patient" ? "solo" : ""}`}>
+    <div className={`app ${auth.role !== "doctor" ? "solo" : ""}`}>
       <header>
         <div className="brand"><Pulse /> CareSight</div>
         <div className="who-am-i">
@@ -243,7 +305,7 @@ export default function App() {
         </div>
       </header>
 
-      {auth.role !== "patient" && (
+      {auth.role === "doctor" && (
       <nav className="roster" aria-label="Patients">
         <input type="search" placeholder="Search patients" value={query}
           onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
@@ -265,7 +327,9 @@ export default function App() {
       </nav>
       )}
 
-      <Detail selected={selected} risk={risk} error={error} />
+      {auth.role === "admin"
+        ? <Admin data={admin} onAdd={addLicense} error={error} />
+        : <Detail selected={selected} risk={risk} error={error} />}
     </div>
   );
 }

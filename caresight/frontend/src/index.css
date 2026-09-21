@@ -107,3 +107,11 @@ input { display: block; width: 100%; margin-top: .3rem; padding: .6rem .7rem; bo
 .check input { width: auto; margin: 0; }
 .app.solo { grid-template-columns: 1fr; }
 .app.solo .detail { width: 100%; margin: 0 auto; }
+
+/* admin registry */
+.inline { display: grid; grid-template-columns: 1fr 1fr auto; gap: .75rem; align-items: end; margin-top: 1.25rem; }
+.inline label { margin: 0; }
+.registry, .activity { list-style: none; padding: 0; margin: 1rem 0 0; }
+.registry li { display: grid; grid-template-columns: 9rem 1fr auto; gap: 1rem; align-items: center; padding: .55rem 0; border-bottom: 1px solid var(--line); }
+.activity li { display: flex; justify-content: space-between; gap: 1rem; padding: .4rem 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 800px) { .inline { grid-template-columns: 1fr; } .registry li { grid-template-columns: 1fr auto; } .activity li { flex-direction: column; gap: 0; } }
