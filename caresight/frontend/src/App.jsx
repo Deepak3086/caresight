@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "https://caresight.onrender.com";
 const LABELS = {
@@ -17,7 +17,7 @@ function Gauge({ score, level }) {
       <path className="arc-track" d="M10 60 A50 50 0 0 1 110 60" />
       <path className="arc-fill" d="M10 60 A50 50 0 0 1 110 60"
         style={{ strokeDasharray: ARC, strokeDashoffset: ARC * (1 - score) }} />
-      <text x="60" y="57" textAnchor="middle" className="pct">{pct}%</text>
+      <text x="60" y="57" textAnchor="middle" className="pct"><CountUp value={pct} />%</text>
     </svg>
   );
 }
@@ -52,6 +52,82 @@ const Num = ({ name, label, min, max }) => (
   <label>{label}<input name={name} type="number" step="any" min={min} max={max} required /></label>
 );
 
+function useCountUp(target, decimals, ms = 900) {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setV(target); return; }
+    let raf, t0;
+    const step = (t) => {
+      t0 ??= t;
+      const k = Math.min((t - t0) / ms, 1);
+      setV(target * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return v.toFixed(decimals);
+}
+function CountUp({ value, decimals = 0 }) { return useCountUp(value, decimals); }
+
+const RANK = { ok: 0, warn: 1, bad: 2 };
+const zone = (v, [a, b]) => (v < a ? "ok" : v < b ? "warn" : "bad");
+const worst = (...z) => z.reduce((m, x) => (RANK[x] > RANK[m] ? x : m), "ok");
+
+function Ecg() {
+  return (
+    <svg className="ecg" viewBox="0 0 120 32" aria-hidden="true">
+      <path pathLength="100" d="M0 16h28l5-10 7 22 6-18 5 6h69" />
+    </svg>
+  );
+}
+
+function BodyPanel({ p }) {
+  const [active, setActive] = useState("glucose");
+  const spots = [
+    { id: "heart", x: 112, y: 108, label: "Heart and blood pressure",
+      text: `Hypertension: ${yesNo(p.hypertension)}. Heart disease: ${yesNo(p.heart_disease)}.`,
+      z: p.hypertension || p.heart_disease ? "bad" : "ok" },
+    { id: "glucose", x: 100, y: 152, label: "Blood sugar",
+      text: `HbA1c ${p.hba1c}%, glucose ${p.glucose} mg/dL.`,
+      z: worst(zone(p.hba1c, RANGES.hba1c.cuts), zone(p.glucose, RANGES.glucose.cuts)) },
+    { id: "bmi", x: 100, y: 198, label: "Body weight", text: `BMI ${p.bmi} kg/m².`, z: zone(p.bmi, RANGES.bmi.cuts) },
+  ];
+  const on = spots.find((x) => x.id === active);
+  return (
+    <aside className="bodypanel" style={{ "--i": 1 }}>
+      <svg viewBox="0 0 200 420" role="group" aria-label="Body diagram. Select a marker for details.">
+        <defs>
+          <linearGradient id="skin" gradientUnits="userSpaceOnUse" x1="30" y1="0" x2="170" y2="0">
+            <stop offset="0" stopColor="#d3dbe8" /><stop offset=".5" stopColor="#f8fafd" /><stop offset="1" stopColor="#c9d3e3" />
+          </linearGradient>
+        </defs>
+        <ellipse cx="100" cy="406" rx="62" ry="8" fill="rgba(40,60,110,.12)" />
+        <g fill="url(#skin)">
+          <ellipse cx="100" cy="34" rx="19" ry="24" />
+          <rect x="91" y="54" width="18" height="18" rx="7" />
+          <path d="M56 86 Q56 72 76 70 L124 70 Q144 72 144 86 L138 152 Q136 182 130 206 L70 206 Q64 182 62 152 Z" />
+        </g>
+        <g fill="none" stroke="url(#skin)" strokeLinecap="round">
+          <path d="M56 90 Q38 120 34 174" strokeWidth="17" /><path d="M144 90 Q162 120 166 174" strokeWidth="17" />
+          <path d="M84 208 L78 300 L76 390" strokeWidth="28" /><path d="M116 208 L122 300 L124 390" strokeWidth="28" />
+        </g>
+        {spots.map((x) => (
+          <g key={x.id} className={`spot ${x.z} ${active === x.id ? "on" : ""}`} role="button" tabIndex={0} aria-label={x.label}
+            onClick={() => setActive(x.id)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setActive(x.id)}>
+            <circle className="hit" cx={x.x} cy={x.y} r="15" />
+            <circle className="ring" cx={x.x} cy={x.y} r="7" />
+            <circle className="dot" cx={x.x} cy={x.y} r="6" />
+          </g>
+        ))}
+      </svg>
+      <div className={`spotcard ${on.z}`} key={on.id}>
+        <b>{on.label}</b><span>{on.text}</span><Ecg />
+      </div>
+    </aside>
+  );
+}
+
 const RANGES = {
   hba1c: { label: "HbA1c", unit: "%", min: 4, max: 10, cuts: [5.7, 6.5] },
   glucose: { label: "Blood glucose", unit: "mg/dL", min: 60, max: 300, cuts: [140, 200] },
@@ -71,47 +147,57 @@ function Range({ value, min, max, cuts }) {
 
 function Detail({ selected, risk, error, onModel }) {
   return (
-    <div className="detail">
+    <div className="detail" key={selected?.id ?? "none"}>
       {error && <p className="error" role="alert">{error}</p>}
       {!selected && <p className="empty">Select a patient from the list to see their screening result and what drives it.</p>}
       {selected && (
         <>
           <h2>{selected.name}</h2>
           <p className="muted">{selected.age} years old, {selected.sex}</p>
-          <section className="tiles">
-            {Object.entries(RANGES).map(([k, r]) => (
-              <div className="tile" key={k}>
-                <div><b>{r.label}</b><small>{r.unit}</small></div>
-                <span className="val">{selected[k]}</span>
-                <Range value={selected[k]} {...r} />
-              </div>
-            ))}
-          </section>
-          <section className="facts">
-            {[["Hypertension", yesNo(selected.hypertension)], ["Heart disease", yesNo(selected.heart_disease)],
-              ["Smoking", show("smoking", selected.smoking)]].map(([k, v]) => <div key={k}><small>{k}</small><b>{v}</b></div>)}
-          </section>
-          {!risk && !error && <p className="muted">Scoring {selected.name}...</p>}
-          {risk && (
-            <section className="cards">
-              <div className="card verdict">
-                <h3>Screening result</h3>
-                <Gauge score={risk.score} level={risk.level} />
-                <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
-                <p className="muted">How closely this record resembles diabetes cases in the training data.</p>
-              </div>
-              <div className="card">
-                <h3>What moved this score</h3>
-                <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
-                <Factors factors={risk.factors} />
-              </div>
-            </section>
-          )}
-          <section className="cta">
-            <div><h3>See how the model works</h3><p>Compared models, test results and known limits.</p></div>
-            <button onClick={onModel}>About the model</button>
-          </section>
-          {risk && <p className="note">{risk.disclaimer}</p>}
+          <div className="workspace">
+            <div className="center">
+              <section className="tiles">
+                {Object.entries(RANGES).map(([k, r], i) => (
+                  <div className="tile" key={k} style={{ "--i": i + 1 }}>
+                    <div><b>{r.label}</b><small>{r.unit}</small></div>
+                    <span className="val"><CountUp value={selected[k]} decimals={k === "glucose" ? 0 : 1} /></span>
+                    <div className="inset"><Range value={selected[k]} {...r} /></div>
+                  </div>
+                ))}
+              </section>
+              <section className="facts">
+                {[["Hypertension", yesNo(selected.hypertension)], ["Heart disease", yesNo(selected.heart_disease)],
+                  ["Smoking", show("smoking", selected.smoking)]].map(([k, v], i) => (
+                  <div key={k} style={{ "--i": i + 4 }}><small>{k}</small><b>{v}</b></div>
+                ))}
+              </section>
+              {risk ? (
+                <section className="cards">
+                  <div className="card verdict" style={{ "--i": 5 }}>
+                    <h3>Screening result</h3>
+                    <Gauge score={risk.score} level={risk.level} />
+                    <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
+                    <p className="muted">How closely this record resembles diabetes cases in the training data.</p>
+                  </div>
+                  <div className="card" style={{ "--i": 6 }}>
+                    <h3>What moved this score</h3>
+                    <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
+                    <Factors factors={risk.factors} />
+                  </div>
+                </section>
+              ) : !error && (
+                <section className="cards" aria-busy="true" aria-label="Scoring">
+                  <div className="card skel" /><div className="card skel" />
+                </section>
+              )}
+              <section className="cta" style={{ "--i": 7 }}>
+                <div><h3>See how the model works</h3><p>Compared models, test results and known limits.</p></div>
+                <button onClick={onModel}>About the model</button>
+              </section>
+              {risk && <p className="note">{risk.disclaimer}</p>}
+            </div>
+            <BodyPanel p={selected} />
+          </div>
         </>
       )}
     </div>

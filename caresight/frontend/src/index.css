@@ -111,3 +111,48 @@ input, select { display: block; width: 100%; margin-top: .3rem; padding: .65rem 
   .registry li { grid-template-columns: 1fr auto; } .activity li { flex-direction: column; gap: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .arc-fill { animation: none; } }
+
+/* ---- motion + layout for the body panel ---- */
+body::before, body::after { content: ""; position: fixed; z-index: -1; border-radius: 50%; filter: blur(70px); opacity: .5; pointer-events: none; }
+body::before { width: 34rem; height: 34rem; background: #9db5ff; top: -10rem; left: -8rem; animation: drift 19s ease-in-out infinite alternate; }
+body::after { width: 30rem; height: 30rem; background: #8fe3f0; bottom: -8rem; right: -6rem; animation: drift 23s ease-in-out infinite alternate-reverse; }
+@keyframes drift { to { transform: translate(6rem, 4rem) scale(1.15); } }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+@keyframes grow { from { transform: scaleX(0); } }
+@keyframes slide { from { left: 0; } }
+@keyframes ping { from { transform: scale(.7); opacity: .9; } to { transform: scale(2.6); opacity: 0; } }
+@keyframes trace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+.glass, .login-page { animation: rise .7s cubic-bezier(.2,.7,.2,1) backwards; }
+.tile, .card, .facts div, .cta, .bodypanel, .spotcard, .empty {
+  animation: rise .55s cubic-bezier(.2,.7,.2,1) backwards; animation-delay: calc(var(--i, 0) * 70ms);
+}
+.tile, .card, .facts div, .rail-btn { transition: transform .2s ease, box-shadow .2s ease; }
+.tile:hover, .card:hover, .facts div:hover { transform: translateY(-3px); box-shadow: 0 16px 34px rgba(40,60,110,.14); }
+.rail-btn:hover { transform: scale(1.08); }
+.logo { animation: beat 2.4s ease-in-out infinite; }
+.axis i { transform-origin: left; animation: grow .8s .25s cubic-bezier(.2,.7,.2,1) backwards; } .axis i.down { transform-origin: right; }
+.strip b { animation: slide 1s .2s cubic-bezier(.2,.8,.2,1) backwards; }
+.skel { min-height: 14rem; background: linear-gradient(100deg, #eef1f8 30%, #fff 50%, #eef1f8 70%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
+
+.inset { grid-column: 1 / -1; background: #f1f4fa; border-radius: 14px; padding: .9rem .9rem .8rem; margin-top: .8rem; }
+.inset .strip { margin: 0; }
+.content.with-roster { grid-template-columns: 16rem 1fr; }
+.workspace { display: grid; grid-template-columns: 1fr 18rem; gap: 1.25rem; align-items: start; margin-top: 1.25rem; }
+.center > .tiles { margin-top: 0; }
+.center .cards { margin-top: 0; }
+.bodypanel { position: sticky; top: 1rem; background: var(--card); border-radius: 24px; padding: 1rem; box-shadow: 0 8px 24px rgba(40,60,110,.08); }
+.bodypanel > svg { display: block; width: 100%; max-height: 27rem; }
+.spot { cursor: pointer; --zone: var(--low); } .spot.warn, .spotcard.warn { --zone: var(--mod); } .spot.bad, .spotcard.bad { --zone: var(--high); }
+.spot .hit { fill: transparent; } .spot .dot { fill: var(--zone); } .spot.on .dot { stroke: #fff; stroke-width: 3; }
+.spot .ring { fill: none; stroke: var(--zone); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ping 1.9s ease-out infinite; }
+.spot:focus-visible .hit { stroke: #9db5ff; stroke-width: 2; }
+.spotcard { --zone: var(--low); margin-top: .75rem; background: #fff; border-radius: 18px; padding: .8rem 1rem; border-left: 4px solid var(--zone); box-shadow: 0 6px 16px rgba(40,60,110,.08); animation-delay: 0s; }
+.spotcard b { display: block; } .spotcard span { color: var(--muted); font-size: .9rem; }
+.ecg { display: block; width: 100%; height: 2rem; margin-top: .4rem; }
+.ecg path { fill: none; stroke: var(--zone); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 100; animation: trace 2.6s ease-in-out infinite; }
+
+@media (max-width: 1100px) { .workspace { grid-template-columns: 1fr; } .bodypanel { position: static; max-width: 24rem; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
