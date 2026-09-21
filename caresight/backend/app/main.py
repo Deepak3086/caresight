@@ -117,7 +117,6 @@ def require(*roles):
 app = FastAPI(title="CareSight")
 app.add_middleware(CORSMiddleware,
                    allow_origins=[o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()],
-                   allow_origin_regex=r"^https://caresight-[a-z0-9]+-itsdeepak0308-2474s-projects\.vercel\.app$",
                    allow_methods=["*"], allow_headers=["*"])
 
 
@@ -297,3 +296,9 @@ def add_license(body: LicenseIn, user: User = Depends(require("admin")), s: Sess
         raise HTTPException(409, "That ID is already in the registry")
     log(s, user, "add_license")
     return {"ok": True}
+
+
+@app.post("/whatif")
+def whatif(body: Vitals, user: User = Depends(require("doctor", "patient"))):
+    """Score hypothetical values for the what-if sliders. Nothing is saved."""
+    return ml.predict(body.model_dump())

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "https://caresight.onrender.com";
 const LABELS = {
@@ -52,15 +52,18 @@ const Num = ({ name, label, min, max }) => (
   <label>{label}<input name={name} type="number" step="any" min={min} max={max} required /></label>
 );
 
-function useCountUp(target, decimals, ms = 900) {
+function useCountUp(target, decimals, ms = 700) {
   const [v, setV] = useState(0);
+  const cur = useRef(0);
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setV(target); return; }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { cur.current = target; setV(target); return; }
+    const from = cur.current;
     let raf, t0;
     const step = (t) => {
       t0 ??= t;
       const k = Math.min((t - t0) / ms, 1);
-      setV(target * (1 - Math.pow(1 - k, 3)));
+      cur.current = from + (target - from) * (1 - Math.pow(1 - k, 3));
+      setV(cur.current);
       if (k < 1) raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
@@ -114,7 +117,7 @@ function BodyPanel({ p }) {
         </g>
         {spots.map((x) => (
           <g key={x.id} className={`spot ${x.z} ${active === x.id ? "on" : ""}`} role="button" tabIndex={0} aria-label={x.label}
-            onClick={() => setActive(x.id)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setActive(x.id)}>
+            onClick={() => setActive(x.id)} onMouseEnter={() => setActive(x.id)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setActive(x.id)}>
             <circle className="hit" cx={x.x} cy={x.y} r="15" />
             <circle className="ring" cx={x.x} cy={x.y} r="7" />
             <circle className="dot" cx={x.x} cy={x.y} r="6" />
@@ -145,9 +148,72 @@ function Range({ value, min, max, cuts }) {
   );
 }
 
-function Detail({ selected, risk, error, onModel }) {
+const pickProfile = (p) => ({
+  sex: p.sex, age: p.age, bmi: p.bmi, hba1c: p.hba1c, glucose: p.glucose,
+  hypertension: p.hypertension, heart_disease: p.heart_disease, smoking: p.smoking,
+});
+
+function WhatIf({ base, sim, delta, onChange, onReset, style }) {
+  const v = sim ?? base;
+  const sliders = [["hba1c", "HbA1c", "%", 4, 10, 0.1], ["glucose", "Blood glucose", "mg/dL", 60, 300, 1], ["bmi", "BMI", "kg/m²", 15, 45, 0.1]];
   return (
-    <div className="detail" key={selected?.id ?? "none"}>
+    <section className="card whatif" style={style}>
+      <div className="whatif-head">
+        <div>
+          <h3>What if?</h3>
+          <p className="muted">Move the sliders to see how the score would change. The saved record is never changed.</p>
+        </div>
+        {sim && <button className="ghost" onClick={onReset}>Reset</button>}
+      </div>
+      {delta !== null && (
+        <p className={`delta ${delta < 0 ? "down" : delta > 0 ? "up" : ""}`} aria-live="polite">
+          {delta === 0 ? "Same as now" : `${Math.abs(delta)} points ${delta < 0 ? "lower" : "higher"} than now`}
+        </p>
+      )}
+      <div className="sliders">
+        {sliders.map(([k, label, unit, min, max, step]) => (
+          <label key={k}>
+            <span>{label} <output>{Number(v[k]).toFixed(step < 1 ? 1 : 0)} {unit}</output></span>
+            <input type="range" min={min} max={max} step={step} value={v[k]} onChange={(e) => onChange(k, +e.target.value)} />
+          </label>
+        ))}
+      </div>
+      <div className="toggles">
+        {[["hypertension", "Hypertension"], ["heart_disease", "Heart disease"]].map(([k, label]) => (
+          <label key={k} className="check">
+            <input type="checkbox" checked={!!v[k]} onChange={(e) => onChange(k, e.target.checked ? 1 : 0)} /> {label}
+          </label>
+        ))}
+        <label>Smoking
+          <select value={v.smoking} onChange={(e) => onChange("smoking", e.target.value)}>
+            <option value="never">Never smoked</option><option value="former">Former smoker</option><option value="current">Current smoker</option>
+          </select>
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function Detail({ selected, risk, error, onModel, onWhatIf }) {
+  const [sim, setSim] = useState(null);
+  const [simRisk, setSimRisk] = useState(null);
+  useEffect(() => {
+    if (!sim) return;
+    let live = true;
+    const t = setTimeout(async () => {
+      try { const r = await onWhatIf(sim); if (live) setSimRisk(r); } catch { /* keep the last result */ }
+    }, 250);
+    return () => { live = false; clearTimeout(t); };
+  }, [sim]);
+
+  const view = selected && sim ? { ...selected, ...sim } : selected;
+  const shown = sim && simRisk ? simRisk : risk;
+  const delta = sim && simRisk && risk ? Math.round((simRisk.score - risk.score) * 100) : null;
+  const change = (k, val) => setSim((prev) => ({ ...(prev ?? pickProfile(selected)), [k]: val }));
+  const reset = () => { setSim(null); setSimRisk(null); };
+
+  return (
+    <div className="detail">
       {error && <p className="error" role="alert">{error}</p>}
       {!selected && <p className="empty">Select a patient from the list to see their screening result and what drives it.</p>}
       {selected && (
@@ -160,29 +226,29 @@ function Detail({ selected, risk, error, onModel }) {
                 {Object.entries(RANGES).map(([k, r], i) => (
                   <div className="tile" key={k} style={{ "--i": i + 1 }}>
                     <div><b>{r.label}</b><small>{r.unit}</small></div>
-                    <span className="val"><CountUp value={selected[k]} decimals={k === "glucose" ? 0 : 1} /></span>
-                    <div className="inset"><Range value={selected[k]} {...r} /></div>
+                    <span className="val"><CountUp value={view[k]} decimals={k === "glucose" ? 0 : 1} /></span>
+                    <div className="inset"><Range value={view[k]} {...r} /></div>
                   </div>
                 ))}
               </section>
               <section className="facts">
-                {[["Hypertension", yesNo(selected.hypertension)], ["Heart disease", yesNo(selected.heart_disease)],
-                  ["Smoking", show("smoking", selected.smoking)]].map(([k, v], i) => (
+                {[["Hypertension", yesNo(view.hypertension)], ["Heart disease", yesNo(view.heart_disease)],
+                  ["Smoking", show("smoking", view.smoking)]].map(([k, v], i) => (
                   <div key={k} style={{ "--i": i + 4 }}><small>{k}</small><b>{v}</b></div>
                 ))}
               </section>
-              {risk ? (
+              {shown ? (
                 <section className="cards">
                   <div className="card verdict" style={{ "--i": 5 }}>
-                    <h3>Screening result</h3>
-                    <Gauge score={risk.score} level={risk.level} />
-                    <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
+                    <h3>Screening result{sim && <span className="tag">Simulated</span>}</h3>
+                    <Gauge score={shown.score} level={shown.level} />
+                    <p className={`level ${shown.level}`}>{shown.level[0].toUpperCase() + shown.level.slice(1)} risk</p>
                     <p className="muted">How closely this record resembles diabetes cases in the training data.</p>
                   </div>
                   <div className="card" style={{ "--i": 6 }}>
                     <h3>What moved this score</h3>
                     <p className="muted">Bars to the right raise the score, bars to the left lower it.</p>
-                    <Factors factors={risk.factors} />
+                    <Factors factors={shown.factors} />
                   </div>
                 </section>
               ) : !error && (
@@ -190,13 +256,14 @@ function Detail({ selected, risk, error, onModel }) {
                   <div className="card skel" /><div className="card skel" />
                 </section>
               )}
-              <section className="cta" style={{ "--i": 7 }}>
+              {risk && <WhatIf base={pickProfile(selected)} sim={sim} delta={delta} onChange={change} onReset={reset} style={{ "--i": 7 }} />}
+              <section className="cta" style={{ "--i": 8 }}>
                 <div><h3>See how the model works</h3><p>Compared models, test results and known limits.</p></div>
                 <button onClick={onModel}>About the model</button>
               </section>
               {risk && <p className="note">{risk.disclaimer}</p>}
             </div>
-            <BodyPanel p={selected} />
+            <BodyPanel p={view} />
           </div>
         </>
       )}
@@ -399,6 +466,8 @@ export default function App() {
     } catch (err) { fail(err); }
   };
 
+  const whatIf = (profile) => call("/whatif", { method: "POST", body: JSON.stringify(profile) });
+
   const assess = async (p) => {
     setSelected(p); setRisk(null); setError("");
     try {
@@ -479,6 +548,11 @@ export default function App() {
 
   const list = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
 
+  const glow = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
+  };
   const hour = new Date().getHours();
   const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   const name = auth.username[0].toUpperCase() + auth.username.slice(1);
@@ -489,7 +563,7 @@ export default function App() {
 
   return (
     <div className="stage">
-      <div className="glass">
+      <div className="glass" onMouseMove={glow}>
         <nav className="rail" aria-label="Main">
           <span className="logo"><Pulse /></span>
           <button className={`rail-btn ${view === "app" ? "on" : ""}`} onClick={() => setView("app")} aria-label="Dashboard" title="Dashboard"><Grid /></button>
@@ -510,10 +584,10 @@ export default function App() {
                 <input type="search" placeholder="Search patients" value={query}
                   onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
                 <ul>
-                  {list.map((p) => {
+                  {list.map((p, i) => {
                     const sc = scores[p.id];
                     return (
-                      <li key={p.id}>
+                      <li key={p.id} style={{ "--i": Math.min(i, 12) }}>
                         <button className={`row ${selected?.id === p.id ? "on" : ""}`} onClick={() => { setView("app"); assess(p); }}
                           aria-current={selected?.id === p.id}>
                           <span className="who"><b>{p.name}</b><small>{p.age} years, BMI {p.bmi}</small></span>
@@ -529,7 +603,7 @@ export default function App() {
             <main className="main">
               {view === "model" ? <ModelCard card={card} />
                 : auth.role === "admin" ? <Admin data={admin} onAdd={addLicense} error={error} />
-                : <Detail selected={selected} risk={risk} error={error} onModel={showModel} />}
+                : <Detail key={selected?.id ?? "none"} selected={selected} risk={risk} error={error} onModel={showModel} onWhatIf={whatIf} />}
             </main>
           </div>
         </div>

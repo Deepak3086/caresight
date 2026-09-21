@@ -156,3 +156,23 @@ body::after { width: 30rem; height: 30rem; background: #8fe3f0; bottom: -8rem; r
 
 @media (max-width: 1100px) { .workspace { grid-template-columns: 1fr; } .bodypanel { position: static; max-width: 24rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---- reactive layer ---- */
+.glass { position: relative; }
+.glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(520px circle at var(--mx, 60%) var(--my, 0%), rgba(255,255,255,.65), transparent 45%); }
+.glass > * { position: relative; }
+.arc-fill { transition: stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1), stroke .3s; }
+.axis i { transition: width .5s cubic-bezier(.2,.8,.2,1); }
+.strip b { transition: left .6s cubic-bezier(.2,.8,.2,1); }
+.spot .dot, .spot .ring { transition: fill .4s, stroke .4s; }
+.spot:hover .dot { stroke: #fff; stroke-width: 3; }
+.roster li { animation: rise .4s backwards; animation-delay: calc(var(--i, 0) * 35ms); }
+.tag { margin-left: .5rem; background: #eaf0ff; color: var(--blue); font-size: .72rem; font-weight: 700; padding: .12rem .55rem; border-radius: 999px; vertical-align: middle; }
+.whatif { margin-top: 1rem; }
+.whatif-head { display: flex; justify-content: space-between; align-items: start; gap: 1rem; } .whatif-head h3 { margin-bottom: .2rem; }
+.delta { font-weight: 700; margin-top: .6rem; } .delta.down { color: var(--low); } .delta.up { color: var(--high); }
+.sliders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; margin-top: 1rem; }
+.sliders label span { display: flex; justify-content: space-between; margin-bottom: .3rem; } .sliders output { color: var(--ink); font-weight: 700; }
+input[type=range] { padding: 0; margin: 0; border: 0; background: transparent; accent-color: var(--blue); cursor: pointer; }
+.toggles { display: flex; flex-wrap: wrap; align-items: end; gap: 1.5rem; margin-top: 1.1rem; } .toggles select { min-width: 10rem; }
+@media (max-width: 860px) { .sliders { grid-template-columns: 1fr; } }
