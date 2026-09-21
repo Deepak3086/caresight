@@ -2,11 +2,12 @@ import { useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "https://caresight.onrender.com";
 const LABELS = {
-  age: "Age", bmi: "BMI", glucose: "Fasting glucose", hba1c: "HbA1c",
-  systolic_bp: "Systolic BP", smoker: "Smoker", family_history: "Family history",
+  sex: "Sex", age: "Age", bmi: "BMI", hba1c: "HbA1c", glucose: "Blood glucose",
+  hypertension: "Hypertension", heart_disease: "Heart disease", smoking: "Smoking",
 };
 const yesNo = (v) => (v ? "Yes" : "No");
-const show = (f, v) => (f === "smoker" || f === "family_history" ? yesNo(v) : v);
+const show = (f, v) =>
+  ["hypertension", "heart_disease"].includes(f) ? yesNo(v) : typeof v === "string" ? v[0].toUpperCase() + v.slice(1) : v;
 const ARC = Math.PI * 50;
 
 function Gauge({ score, level }) {
@@ -59,11 +60,11 @@ function Detail({ selected, risk, error }) {
       {selected && (
         <>
           <h2>{selected.name}</h2>
-          <p className="muted">{selected.age} years old</p>
+          <p className="muted">{selected.age} years old, {selected.sex}</p>
           <dl className="vitals">
-            {[["BMI", selected.bmi, ""], ["Fasting glucose", selected.glucose, "mg/dL"], ["HbA1c", selected.hba1c, "%"],
-              ["Systolic BP", selected.systolic_bp, "mmHg"], ["Smoker", yesNo(selected.smoker), ""],
-              ["Family history", yesNo(selected.family_history), ""]].map(([k, v, u]) => (
+            {[["BMI", selected.bmi, ""], ["Blood glucose", selected.glucose, "mg/dL"], ["HbA1c", selected.hba1c, "%"],
+              ["Hypertension", yesNo(selected.hypertension), ""], ["Heart disease", yesNo(selected.heart_disease), ""],
+              ["Smoking", show("smoking", selected.smoking), ""]].map(([k, v, u]) => (
               <div key={k}><dt>{k}</dt><dd>{v} <small>{u}</small></dd></div>
             ))}
           </dl>
@@ -74,7 +75,7 @@ function Detail({ selected, risk, error }) {
                 <Gauge score={risk.score} level={risk.level} />
                 <div>
                   <p className={`level ${risk.level}`}>{risk.level[0].toUpperCase() + risk.level.slice(1)} risk</p>
-                  <p className="muted">Estimated from age, BMI, glucose, HbA1c, blood pressure, smoking and family history.</p>
+                  <p className="muted">How closely this record resembles diabetes cases in the training data, from age, sex, BMI, blood glucose, HbA1c, hypertension, heart disease and smoking.</p>
                 </div>
               </section>
               <h3>What moved this score</h3>
@@ -123,6 +124,64 @@ function Admin({ data, onAdd, error }) {
   );
 }
 
+function ModelCard({ card }) {
+  const t = card.test;
+  const pct = (x) => `${(x * 100).toFixed(1)}%`;
+  const drivers = Object.entries(card.importance).sort((a, b) => b[1] - a[1]);
+  const top = Math.max(...drivers.map(([, v]) => v), 0.0001);
+  return (
+    <main className="detail mc">
+      <h2>About the model</h2>
+      <p className="muted">
+        Trained on the public Kaggle "Diabetes prediction dataset": {card.dataset.rows.toLocaleString()} records after
+        removing duplicates, {pct(card.dataset.positive_rate)} of them with diabetes.
+      </p>
+      <h3>Models compared (5-fold cross-validation)</h3>
+      <table>
+        <thead><tr><th>Model</th><th>ROC AUC</th><th>Average precision</th></tr></thead>
+        <tbody>
+          {Object.entries(card.candidates).map(([name, m]) => (
+            <tr key={name} className={name === card.selected ? "sel" : ""}>
+              <td>{name}{name === card.selected ? " (selected)" : ""}</td><td>{m.roc_auc}</td><td>{m.avg_precision}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3>Held-out test results ({t.n_test.toLocaleString()} records)</h3>
+      <dl className="vitals">
+        {[["ROC AUC", t.roc_auc], ["Average precision", t.avg_precision], ["Recall", pct(t.recall)],
+          ["Precision", pct(t.precision)], ["Brier score (lower is better)", t.brier], ["Alert threshold", pct(card.threshold)]]
+          .map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+      </dl>
+      <div className="cm">
+        <div>Correctly cleared<b>{t.tn.toLocaleString()}</b></div>
+        <div>False alarms<b>{t.fp.toLocaleString()}</b></div>
+        <div>Missed cases<b>{t.fn.toLocaleString()}</b></div>
+        <div>Cases caught<b>{t.tp.toLocaleString()}</b></div>
+      </div>
+      <h3>What the model relies on</h3>
+      <p className="muted">Drop in ROC AUC when each input is shuffled on the test set.</p>
+      <ul className="factors">
+        {drivers.map(([f, v]) => (
+          <li key={f}>
+            <span className="fname">{LABELS[f]}</span>
+            <span className="axis plain" aria-hidden="true"><i className="brand" style={{ width: `${(v / top) * 100}%` }} /></span>
+            <span className="fval">{v.toFixed(3)}</span>
+          </li>
+        ))}
+      </ul>
+      <h3>Limits</h3>
+      <ul className="limits">
+        <li>The dataset's origin isn't documented, so this is not clinical validation.</li>
+        <li>It estimates whether a record looks like a current diabetes case. It does not forecast who will develop diabetes.</li>
+        <li>HbA1c and glucose dominate because they are used to diagnose diabetes, so strong scores are expected.</li>
+        <li>Blood pressure, family history and other known risk factors are not in the data.</li>
+        <li>Screening demo only. Not for medical decisions.</li>
+      </ul>
+    </main>
+  );
+}
+
 export default function App() {
   const [auth, setAuth] = useState(null);
   const [patients, setPatients] = useState([]);
@@ -135,10 +194,12 @@ export default function App() {
   const [mode, setMode] = useState("signin");
   const [role, setRole] = useState("patient");
   const [admin, setAdmin] = useState(null);
+  const [view, setView] = useState("app");
+  const [card, setCard] = useState(null);
 
   const signOut = (msg = "") => {
     setAuth(null); setPatients([]); setSelected(null); setRisk(null);
-    setScores({}); setQuery(""); setAdmin(null); setError(msg);
+    setScores({}); setQuery(""); setAdmin(null); setView("app"); setError(msg);
   };
   const fail = (err) => { if (err.message !== "expired") setError(err.message); };
 
@@ -186,9 +247,9 @@ export default function App() {
         if (role === "patient") {
           body.name = f.get("name");
           body.profile = {
-            age: +f.get("age"), bmi: +f.get("bmi"), glucose: +f.get("glucose"),
-            hba1c: +f.get("hba1c"), systolic_bp: +f.get("systolic_bp"),
-            smoker: f.get("smoker") ? 1 : 0, family_history: f.get("family_history") ? 1 : 0,
+            sex: f.get("sex"), age: +f.get("age"), bmi: +f.get("bmi"), glucose: +f.get("glucose"),
+            hba1c: +f.get("hba1c"), smoking: f.get("smoking"),
+            hypertension: f.get("hypertension") ? 1 : 0, heart_disease: f.get("heart_disease") ? 1 : 0,
           };
         } else {
           body.name = f.get("name");
@@ -213,6 +274,15 @@ export default function App() {
       });
       setAdmin({ ...admin, licenses: await call("/admin/licenses") });
       form.reset();
+    } catch (err) { fail(err); }
+  };
+
+  const toggleModel = async () => {
+    if (view === "model") return setView("app");
+    setError("");
+    try {
+      if (!card) setCard(await call("/model"));
+      setView("model");
     } catch (err) { fail(err); }
   };
 
@@ -265,12 +335,13 @@ export default function App() {
                     <div className="grid2">
                       <Num name="age" label="Age" min={0} max={120} />
                       <Num name="bmi" label="BMI" min={10} max={80} />
-                      <Num name="glucose" label="Fasting glucose (mg/dL)" min={30} max={600} />
+                      <Num name="glucose" label="Blood glucose (mg/dL)" min={30} max={600} />
                       <Num name="hba1c" label="HbA1c (%)" min={3} max={18} />
-                      <Num name="systolic_bp" label="Systolic BP (mmHg)" min={60} max={260} />
+                      <label>Sex<select name="sex" defaultValue="female"><option value="female">Female</option><option value="male">Male</option></select></label>
+                      <label>Smoking<select name="smoking" defaultValue="never"><option value="never">Never smoked</option><option value="former">Former smoker</option><option value="current">Current smoker</option></select></label>
                     </div>
-                    <label className="check"><input type="checkbox" name="smoker" /> I smoke</label>
-                    <label className="check"><input type="checkbox" name="family_history" /> Family history of heart disease or diabetes</label>
+                    <label className="check"><input type="checkbox" name="hypertension" /> I have high blood pressure (hypertension)</label>
+                    <label className="check"><input type="checkbox" name="heart_disease" /> I have heart disease</label>
                   </>
                 )}
                 {role === "doctor" && (
@@ -301,6 +372,7 @@ export default function App() {
         <div className="brand"><Pulse /> CareSight</div>
         <div className="who-am-i">
           <span>{auth.username} <small>({auth.role})</small></span>
+          <button className="ghost" onClick={toggleModel}>{view === "model" ? "Back" : "About the model"}</button>
           <button className="ghost" onClick={() => signOut()}>Sign out</button>
         </div>
       </header>
@@ -327,8 +399,8 @@ export default function App() {
       </nav>
       )}
 
-      {auth.role === "admin"
-        ? <Admin data={admin} onAdd={addLicense} error={error} />
+      {view === "model" ? <ModelCard card={card} />
+        : auth.role === "admin" ? <Admin data={admin} onAdd={addLicense} error={error} />
         : <Detail selected={selected} risk={risk} error={error} />}
     </div>
   );

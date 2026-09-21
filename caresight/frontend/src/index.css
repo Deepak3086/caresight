@@ -115,3 +115,17 @@ input { display: block; width: 100%; margin-top: .3rem; padding: .6rem .7rem; bo
 .registry li { display: grid; grid-template-columns: 9rem 1fr auto; gap: 1rem; align-items: center; padding: .55rem 0; border-bottom: 1px solid var(--line); }
 .activity li { display: flex; justify-content: space-between; gap: 1rem; padding: .4rem 0; border-bottom: 1px solid var(--line); }
 @media (max-width: 800px) { .inline { grid-template-columns: 1fr; } .registry li { grid-template-columns: 1fr auto; } .activity li { flex-direction: column; gap: 0; } }
+
+/* model card + selects */
+select { display: block; width: 100%; margin-top: .3rem; padding: .6rem .7rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; color: var(--ink); }
+.mc table { width: 100%; border-collapse: collapse; margin-top: .75rem; }
+.mc th { text-align: left; color: var(--muted); font-weight: 500; }
+.mc th, .mc td { padding: .5rem .4rem; border-bottom: 1px solid var(--line); }
+.mc tr.sel td { font-weight: 700; color: var(--brand); }
+.cm { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; max-width: 26rem; margin-top: 1.25rem; }
+.cm div { padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); font-size: .9rem; }
+.cm b { display: block; font-size: 1.4rem; color: var(--ink); }
+.axis.plain::after { display: none; }
+.axis i.brand { background: var(--brand); left: 0; }
+.limits { color: var(--muted); padding-left: 1.1rem; }
+.limits li { margin: .3rem 0; }

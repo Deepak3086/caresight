@@ -1,85 +1,151 @@
-"""Synthetic data, model training, prediction and per-patient explanations."""
+"""Diabetes screening model: training, evaluation, prediction and explanations.
+
+Train once with `python -m app.ml` (needs data/diabetes_prediction_dataset.csv).
+The trained model is saved to app/model.joblib and loaded by the API.
+"""
+import sys
 import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import roc_auc_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (average_precision_score, brier_score_loss, confusion_matrix,
+                             precision_recall_curve, roc_auc_score)
+from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_validate, train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-FEATURES = ["age", "bmi", "glucose", "hba1c", "systolic_bp", "smoker", "family_history"]
+FEATURES = ["sex", "age", "bmi", "hba1c", "glucose", "hypertension", "heart_disease", "smoking"]
+NUMERIC = ["age", "bmi", "hba1c", "glucose", "hypertension", "heart_disease"]
+CATEGORICAL = ["sex", "smoking"]
+DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "diabetes_prediction_dataset.csv"
 MODEL_PATH = Path(__file__).with_name("model.joblib")
 _bundle = None
 
 
-def synthetic_patients(n=4000, seed=0):
-    """Fully synthetic cardiometabolic cohort. No real patient data."""
-    r = np.random.default_rng(seed)
-    df = pd.DataFrame({
-        "age": r.integers(21, 85, n),
-        "bmi": r.normal(28, 5, n).clip(16, 50).round(1),
-        "glucose": r.normal(105, 25, n).clip(60, 250).round(),
-        "hba1c": r.normal(5.8, 0.9, n).clip(4, 12).round(1),
-        "systolic_bp": r.normal(126, 16, n).clip(85, 210).round(),
-        "smoker": r.binomial(1, 0.2, n),
-        "family_history": r.binomial(1, 0.3, n),
-    })
-    z = (-10.9 + 0.03 * df.age + 0.06 * df.bmi + 0.02 * df.glucose + 0.45 * df.hba1c
-         + 0.015 * df.systolic_bp + 0.5 * df.smoker + 0.6 * df.family_history
-         + r.normal(0, 0.5, n))
-    df["high_risk"] = (r.random(n) < 1 / (1 + np.exp(-z))).astype(int)
-    return df
+def load_dataset(path=DATA_PATH):
+    df = pd.read_csv(path)
+    df = df[df["gender"].isin(["Female", "Male"])].copy()
+    df["sex"] = df["gender"].str.lower()
+    df["smoking"] = df["smoking_history"].map(
+        {"never": "never", "former": "former", "not current": "former", "current": "current"}).fillna("unknown")
+    df = df.rename(columns={"HbA1c_level": "hba1c", "blood_glucose_level": "glucose"})
+    return df[FEATURES + ["diabetes"]].drop_duplicates().reset_index(drop=True)
 
 
-def train():
-    df = synthetic_patients()
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        df[FEATURES], df.high_risk, test_size=0.2, stratify=df.high_risk, random_state=42)
-    model = GradientBoostingClassifier(random_state=42).fit(X_tr, y_tr)
-    proba = model.predict_proba(X_te)[:, 1]
-    pred = proba >= 0.5
-    metrics = {
-        "auc": round(roc_auc_score(y_te, proba), 3),
-        "precision": round(precision_score(y_te, pred), 3),
-        "recall": round(recall_score(y_te, pred), 3),
-        "positive_rate": round(float(df.high_risk.mean()), 3),
+def _pipeline(estimator):
+    prep = ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
+                              ("num", StandardScaler(), NUMERIC)])
+    return make_pipeline(prep, estimator)
+
+
+def train(data_path=DATA_PATH, out=MODEL_PATH):
+    df = load_dataset(data_path)
+    X, y = df[FEATURES], df["diabetes"]
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+
+    candidates = {
+        "Logistic regression": LogisticRegression(max_iter=1000, class_weight="balanced"),
+        "Random forest": RandomForestClassifier(n_estimators=100, max_depth=12, min_samples_leaf=20,
+                                                class_weight="balanced_subsample", n_jobs=-1, random_state=42),
+        "Gradient boosting": HistGradientBoostingClassifier(random_state=42),
     }
-    joblib.dump({"model": model, "medians": X_tr.median().to_dict(), "metrics": metrics}, MODEL_PATH)
-    return metrics
+    cv = StratifiedKFold(5, shuffle=True, random_state=42)
+    compared = {}
+    for name, est in candidates.items():
+        r = cross_validate(_pipeline(est), X_tr, y_tr, cv=cv, scoring=["roc_auc", "average_precision"], n_jobs=1)
+        compared[name] = {"roc_auc": round(float(r["test_roc_auc"].mean()), 4),
+                          "avg_precision": round(float(r["test_average_precision"].mean()), 4)}
+        print(f"  {name}: {compared[name]}")
+    best = max(compared, key=lambda k: compared[k]["avg_precision"])
+
+    # calibrate so a score of 30% means roughly 30% of similar records are positive
+    def calibrated():
+        return CalibratedClassifierCV(_pipeline(candidates[best]), method="isotonic", cv=3)
+
+    # pick the alert threshold on out-of-fold predictions (recall-weighted F2), never on the test set
+    oof = cross_val_predict(calibrated(), X_tr, y_tr, cv=3, method="predict_proba")[:, 1]
+    prec, rec, thr = precision_recall_curve(y_tr, oof)
+    f2 = 5 * prec[:-1] * rec[:-1] / np.maximum(4 * prec[:-1] + rec[:-1], 1e-9)
+    threshold = float(thr[int(np.argmax(f2))])
+
+    model = calibrated().fit(X_tr, y_tr)
+    p_te = model.predict_proba(X_te)[:, 1]
+    flag = p_te >= threshold
+    tn, fp, fn, tp = confusion_matrix(y_te, flag).ravel()
+    imp = permutation_importance(model, X_te.sample(min(5000, len(X_te)), random_state=0),
+                                 y_te.loc[X_te.sample(min(5000, len(X_te)), random_state=0).index],
+                                 scoring="roc_auc", n_repeats=5, random_state=0)
+    card = {
+        "dataset": {"name": "Kaggle: Diabetes prediction dataset", "rows": int(len(df)),
+                    "positive_rate": round(float(y.mean()), 4)},
+        "candidates": compared, "selected": best, "threshold": round(threshold, 3),
+        "test": {"n_test": int(len(y_te)), "roc_auc": round(float(roc_auc_score(y_te, p_te)), 4),
+                 "avg_precision": round(float(average_precision_score(y_te, p_te)), 4),
+                 "precision": round(float(tp / max(tp + fp, 1)), 4), "recall": round(float(tp / max(tp + fn, 1)), 4),
+                 "brier": round(float(brier_score_loss(y_te, p_te)), 4),
+                 "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+        "importance": {f: round(max(float(v), 0.0), 4) for f, v in zip(FEATURES, imp.importances_mean)},
+    }
+    baseline = {**X_tr[NUMERIC].median().to_dict(), "sex": X_tr["sex"].mode()[0], "smoking": "never"}
+    joblib.dump({"model": model, "threshold": threshold, "baseline": baseline, "card": card}, out, compress=3)
+    print(f"Saved {out} ({Path(out).stat().st_size / 1e6:.1f} MB)")
+    return card
 
 
 def _load():
     global _bundle
     if _bundle is None:
         if not MODEL_PATH.exists():
-            train()
+            raise RuntimeError("Model not found. Run `python -m app.ml` in the backend folder first.")
         _bundle = joblib.load(MODEL_PATH)
     return _bundle
 
 
 def predict(patient: dict):
-    """Return risk score plus the factors pushing it up or down.
-
-    Explanation = how much the score changes when one feature is replaced by the
-    training median (a simple, model-agnostic occlusion method).
-    """
+    """Score plus the factors moving it. Each factor = change in score when that input is
+    replaced by a typical value (median, or 'no' / 'never'). Sex is used by the model
+    but never shown as a driver."""
     b = _load()
     row = pd.DataFrame([{f: patient[f] for f in FEATURES}])
     score = float(b["model"].predict_proba(row)[0, 1])
     factors = []
     for f in FEATURES:
-        base = row.copy()
-        base[f] = b["medians"][f]
-        delta = score - float(b["model"].predict_proba(base)[0, 1])
-        factors.append({"feature": f, "value": patient[f], "impact": round(delta, 3)})
+        if f == "sex":
+            continue
+        alt = row.copy()
+        alt[f] = b["baseline"][f]
+        factors.append({"feature": f, "value": patient[f],
+                        "impact": round(score - float(b["model"].predict_proba(alt)[0, 1]), 3)})
     factors.sort(key=lambda x: abs(x["impact"]), reverse=True)
-    level = "high" if score >= 0.6 else "moderate" if score >= 0.3 else "low"
+    t = b["threshold"]
+    level = "high" if score >= t else "moderate" if score >= t / 2 else "low"
     return {"score": round(score, 3), "level": level, "factors": factors[:4]}
 
 
 def model_metrics():
-    return _load()["metrics"]
+    return _load()["card"]
+
+
+def demo_patients(n=25, seed=7):
+    """Made-up patients for the demo roster."""
+    r = np.random.default_rng(seed)
+    return [{
+        "sex": str(r.choice(["female", "male"])), "age": int(r.integers(25, 82)),
+        "bmi": round(float(np.clip(r.normal(28, 5), 16, 50)), 1),
+        "hba1c": round(float(np.clip(r.normal(5.8, 0.9), 4, 10)), 1),
+        "glucose": float(round(np.clip(r.normal(130, 40), 70, 300))),
+        "hypertension": int(r.random() < 0.2), "heart_disease": int(r.random() < 0.08),
+        "smoking": str(r.choice(["never", "former", "current"], p=[0.6, 0.25, 0.15])),
+    } for _ in range(n)]
 
 
 if __name__ == "__main__":
+    if not DATA_PATH.exists():
+        sys.exit(f"Dataset not found at {DATA_PATH}\nDownload diabetes_prediction_dataset.csv from Kaggle first.")
+    print("Training...")
     print(train())

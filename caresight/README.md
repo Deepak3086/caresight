@@ -1,43 +1,47 @@
-# CareSight: patient risk dashboard
+# CareSight: diabetes screening dashboard
 
-A clinical decision-support demo. Doctors sign in, review a patient list, and get a
-cardiometabolic risk score with the factors that moved it. **Synthetic data only. Not a diagnostic tool.**
+A screening demo. Patients and verified doctors sign in, and each record gets a diabetes-likelihood score with the
+inputs that moved it. **Not a diagnostic tool. Do not enter real health information.**
+
+Live app: add your Vercel link here. API docs: add your Render link + `/docs`.
 
 ## Stack
 FastAPI, SQLAlchemy (SQLite by default, PostgreSQL via `DATABASE_URL`), scikit-learn, PyJWT, React + Vite.
 
+## The model
+- **Data:** Kaggle "Diabetes prediction dataset" (`diabetes_prediction_dataset.csv`, about 100,000 records: sex, age, BMI,
+  HbA1c, blood glucose, hypertension, heart disease, smoking). Check its license on Kaggle before republishing it.
+- **Training (`backend/app/ml.py`):** duplicates removed, stratified 80/20 split, logistic regression vs random forest vs
+  gradient boosting compared with 5-fold cross-validation on average precision (the classes are imbalanced),
+  probabilities calibrated (isotonic), and the alert threshold picked on out-of-fold predictions with a recall-weighted F2.
+- **Evaluation:** ROC AUC, average precision, precision/recall at the threshold, Brier score, confusion matrix and
+  permutation importance, all shown in the app under "About the model".
+- **Explanations:** per-patient change in score when one input is replaced by a typical value.
+- **Limits:** the dataset's origin is undocumented; the label is current diabetes status, not future risk; HbA1c and glucose
+  dominate because they define the diagnosis.
+
 ## Run it
 ```bash
-# backend
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && .venv\Scripts\activate      # Mac/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-python -m app.ml                      # trains the model, prints AUC / precision / recall
-uvicorn app.main:app --reload         # http://localhost:8000/docs
+# put diabetes_prediction_dataset.csv in backend/data/
+python -m app.ml                                     # trains, prints metrics, writes app/model.joblib
+uvicorn app.main:app --reload                        # http://localhost:8000/docs
 
-# frontend (new terminal)
-cd frontend && npm install && npm run dev   # http://localhost:5173
+cd ../frontend && npm install && npm run dev         # http://localhost:5173
 ```
-Demo logins: `doctor / doctor123` and `admin / admin123`. Set `JWT_SECRET` outside local dev.
+Commit `backend/app/model.joblib` so the deployed API can load it without the dataset. Train inside the venv
+created from `requirements.txt` so the scikit-learn version matches the server.
 
-## What it demonstrates
-- JWT auth with PBKDF2-hashed passwords and role-based access (doctor vs admin)
-- Audit log of every patient list, create and risk view (`GET /audit`, admin only)
-- Gradient-boosted model with a per-patient explanation (feature occlusion against training medians)
-- Input validation on all patient fields with Pydantic
+Demo logins: `doctor / doctor123`, `admin / admin123`. Patients can create an account; doctors need a registry ID
+(demo: `DOC-1001`, name Asha Rao, up to `DOC-1005`).
 
-## Next steps that would make it stronger
-1. Swap the generated cohort for Synthea (FHIR) or the UCI Heart Disease dataset and re-report metrics
-2. Add pytest tests for auth, RBAC and prediction; add Dockerfile + docker-compose with PostgreSQL
-3. Replace the occlusion explanation with SHAP; add calibration and a threshold tuned for recall
-4. Deploy (Render/Railway + Vercel) and add screenshots here
+## Security features
+JWT auth with PBKDF2-hashed passwords, roles (patient, doctor, admin), doctor registry (one ID per account), audit log,
+input validation.
 
-## Resume bullets (fill in your real numbers)
-- Built a role-based clinical dashboard (FastAPI, React, SQLAlchemy) serving patient risk scores with per-patient explanations.
-- Trained and evaluated a gradient-boosted classifier (AUC 0.73 on a held-out synthetic set) behind a REST inference API.
-- Implemented JWT authentication, RBAC and audit logging to mirror healthcare data-access requirements.
-
-## Doctor verification
-Doctor accounts can't be created freely. Sign-up needs a registration ID from the doctor registry plus the matching
-name, and each ID can be claimed by one account only. Admins manage the registry in the app. The seeded demo IDs are
-`DOC-1001` (Asha Rao) to `DOC-1005`. A production version would check an official medical register instead.
+## Resume bullets (fill in the numbers from your own training run)
+- Built and deployed a full-stack diabetes screening app (React, FastAPI, scikit-learn) with role-based access and a verified-doctor registry.
+- Compared logistic regression, random forest and gradient boosting on ~100k records with cross-validation; calibrated the best model and tuned the alert threshold for recall (ROC AUC X, recall Y).
+- Added per-patient explanations, permutation importance and an in-app model card documenting metrics and limitations.

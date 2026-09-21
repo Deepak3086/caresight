@@ -36,13 +36,14 @@ class Patient(Base):
     __tablename__ = "patients"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String)
+    sex: Mapped[str] = mapped_column(String)
     age: Mapped[int] = mapped_column(Integer)
     bmi: Mapped[float] = mapped_column(Float)
-    glucose: Mapped[float] = mapped_column(Float)
     hba1c: Mapped[float] = mapped_column(Float)
-    systolic_bp: Mapped[float] = mapped_column(Float)
-    smoker: Mapped[int] = mapped_column(Integer)
-    family_history: Mapped[int] = mapped_column(Integer)
+    glucose: Mapped[float] = mapped_column(Float)
+    hypertension: Mapped[int] = mapped_column(Integer)
+    heart_disease: Mapped[int] = mapped_column(Integer)
+    smoking: Mapped[str] = mapped_column(String)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, unique=True)
 
 
@@ -130,8 +131,8 @@ def seed():
             return
         s.add_all([User(username="doctor", password_hash=hash_pw("doctor123"), role="doctor"),
                    User(username="admin", password_hash=hash_pw("admin123"), role="admin")])
-        for i, row in ml.synthetic_patients(25, seed=7).iterrows():
-            s.add(Patient(name=f"Patient {i + 1:03d}", **{k: float(row[k]) if k in ("bmi", "glucose", "hba1c", "systolic_bp") else int(row[k]) for k in ml.FEATURES}))
+        for i, row in enumerate(ml.demo_patients(25, seed=7)):
+            s.add(Patient(name=f"Patient {i + 1:03d}", **row))
         s.commit()
 
 
@@ -141,13 +142,14 @@ class Login(BaseModel):
 
 
 class Vitals(BaseModel):
+    sex: Literal["female", "male"]
     age: int = Field(ge=0, le=120)
     bmi: float = Field(ge=10, le=80)
-    glucose: float = Field(ge=30, le=600)
     hba1c: float = Field(ge=3, le=18)
-    systolic_bp: float = Field(ge=60, le=260)
-    smoker: int = Field(ge=0, le=1)
-    family_history: int = Field(ge=0, le=1)
+    glucose: float = Field(ge=30, le=600)
+    hypertension: int = Field(ge=0, le=1)
+    heart_disease: int = Field(ge=0, le=1)
+    smoking: Literal["never", "former", "current"]
 
 
 class PatientIn(Vitals):
@@ -216,7 +218,7 @@ def register(body: Register, s: Session = Depends(db)):
 
 def risk_payload(p: Patient) -> dict:
     return {"patient_id": p.id, **ml.predict({f: getattr(p, f) for f in ml.FEATURES}),
-            "disclaimer": "Decision support demo on synthetic data. Not a diagnosis."}
+            "disclaimer": "Screening demo trained on a public dataset. Not a diagnosis."}
 
 
 def own_record(user: User, s: Session) -> Patient:
