@@ -194,7 +194,7 @@ function WhatIf({ base, sim, delta, onChange, onReset, style }) {
   );
 }
 
-function Detail({ selected, risk, error, onModel, onWhatIf }) {
+function Detail({ selected, risk, error, mode, onWhatIf, whatIfHref, resultsHref, backHref, backLabel }) {
   const [sim, setSim] = useState(null);
   const [simRisk, setSimRisk] = useState(null);
   useEffect(() => {
@@ -218,10 +218,12 @@ function Detail({ selected, risk, error, onModel, onWhatIf }) {
       {!selected && <p className="empty">Select a patient from the list to see their screening result and what drives it.</p>}
       {selected && (
         <>
+          {backLabel && <a className="back" href={backHref}>{backLabel}</a>}
           <h2>{selected.name}</h2>
           <p className="muted">{selected.age} years old, {selected.sex}</p>
           <div className="workspace">
             <div className="center">
+              {mode === "whatif" && risk && <WhatIf base={pickProfile(selected)} sim={sim} delta={delta} onChange={change} onReset={reset} style={{ "--i": 0 }} />}
               <section className="tiles">
                 {Object.entries(RANGES).map(([k, r], i) => (
                   <div className="tile" key={k} style={{ "--i": i + 1 }}>
@@ -256,10 +258,12 @@ function Detail({ selected, risk, error, onModel, onWhatIf }) {
                   <div className="card skel" /><div className="card skel" />
                 </section>
               )}
-              {risk && <WhatIf base={pickProfile(selected)} sim={sim} delta={delta} onChange={change} onReset={reset} style={{ "--i": 7 }} />}
               <section className="cta" style={{ "--i": 8 }}>
-                <div><h3>See how the model works</h3><p>Compared models, test results and known limits.</p></div>
-                <button onClick={onModel}>About the model</button>
+                {mode === "whatif" ? (
+                  <><div><h3>Back to the saved result</h3><p>See the full record and its explanation.</p></div><a href={resultsHref}>View result</a></>
+                ) : (
+                  <><div><h3>Try the what-if simulator</h3><p>See how the score changes if HbA1c, glucose or BMI improve.</p></div><a href={whatIfHref}>Open simulator</a></>
+                )}
               </section>
               {risk && <p className="note">{risk.disclaimer}</p>}
             </div>
@@ -271,12 +275,101 @@ function Detail({ selected, risk, error, onModel, onWhatIf }) {
   );
 }
 
-function Admin({ data, onAdd, error }) {
+const cap = (t) => t[0].toUpperCase() + t.slice(1);
+const go = (to) => { window.location.hash = to; };
+
+function useRoute() {
+  const read = () => window.location.hash.replace(/^#/, "") || "/";
+  const [path, setPath] = useState(read);
+  useEffect(() => {
+    const on = () => setPath(read());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return path;
+}
+
+function Overview({ patients }) {
+  const n = (l) => patients.filter((p) => p.level === l).length;
+  const total = patients.length || 1;
+  const top = [...patients].sort((a, b) => b.score - a.score).slice(0, 5);
+  const kpis = [["Patients", patients.length, "", "all"], ["High risk", n("high"), "high", "high"],
+    ["Moderate", n("moderate"), "moderate", "moderate"], ["Low", n("low"), "low", "low"]];
+  return (
+    <div className="detail">
+      <section className="tiles kpis">
+        {kpis.map(([label, count, cls, f], i) => (
+          <a className={`tile kpi ${cls}`} key={label} style={{ "--i": i }} href={f === "all" ? "#/patients" : `#/patients?risk=${f}`}>
+            <div><b>{label}</b><small>{Math.round((count / total) * 100)}% of patients</small></div>
+            <span className="val"><CountUp value={count} /></span>
+            <div className="inset"><div className="share"><i style={{ width: `${(count / total) * 100}%` }} /></div></div>
+          </a>
+        ))}
+      </section>
+      <section className="cards two">
+        <div className="card" style={{ "--i": 4 }}>
+          <h3>Risk mix</h3>
+          <p className="muted">How the current patient list splits across screening levels.</p>
+          <div className="mix" role="img" aria-label={`${n("high")} high, ${n("moderate")} moderate, ${n("low")} low`}>
+            {["high", "moderate", "low"].map((l) => <i key={l} className={l} style={{ width: `${(n(l) / total) * 100}%` }} />)}
+          </div>
+          <p className="legend"><span className="high">High {n("high")}</span><span className="moderate">Moderate {n("moderate")}</span><span className="low">Low {n("low")}</span></p>
+        </div>
+        <div className="card" style={{ "--i": 5 }}>
+          <h3>Needs attention</h3>
+          <p className="muted">Highest screening scores first.</p>
+          <ul className="attention">
+            {top.map((p) => (
+              <li key={p.id}>
+                <a href={`#/patients/${p.id}`}><span className="who"><b>{p.name}</b><small>{p.age} years, HbA1c {p.hba1c}%</small></span>
+                  <span className={`chip ${p.level}`}>{Math.round(p.score * 100)}%</span></a>
+              </li>
+            ))}
+            {top.length === 0 && <li className="muted">No patients yet.</li>}
+          </ul>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PatientsPage({ patients, filter }) {
+  const [q, setQ] = useState("");
+  const rows = patients.filter((p) => (filter === "all" || p.level === filter) && p.name.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => b.score - a.score);
+  return (
+    <div className="detail">
+      <div className="toolbar">
+        <input type="search" placeholder="Search patients" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search patients" />
+        <div className="segs" role="group" aria-label="Filter by risk">
+          {["all", "high", "moderate", "low"].map((f) => (
+            <a key={f} href={f === "all" ? "#/patients" : `#/patients?risk=${f}`} className={filter === f ? "on" : ""}>{cap(f)}</a>
+          ))}
+        </div>
+      </div>
+      <div className="panel table-wrap">
+        <table className="plist">
+          <thead><tr><th>Patient</th><th>Age</th><th>Sex</th><th>HbA1c</th><th>Glucose</th><th>BMI</th><th>Screening</th></tr></thead>
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.id} onClick={() => go(`/patients/${p.id}`)}>
+                <td><a href={`#/patients/${p.id}`}>{p.name}</a></td><td>{p.age}</td><td>{cap(p.sex)}</td>
+                <td>{p.hba1c}%</td><td>{p.glucose}</td><td>{p.bmi}</td>
+                <td><span className={`chip ${p.level}`}>{Math.round(p.score * 100)}% {p.level}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {rows.length === 0 && <p className="muted pad">No patients match.</p>}
+      </div>
+    </div>
+  );
+}
+
+function Registry({ data, onAdd, error }) {
   const licenses = data?.licenses ?? [];
-  const audit = data?.audit ?? [];
   return (
     <div className="detail panel">
-      <h2>Doctor registry</h2>
       <p className="muted">A doctor can only create an account with an unused ID and the matching name.</p>
       {error && <p className="error" role="alert">{error}</p>}
       <form className="inline" onSubmit={onAdd}>
@@ -292,9 +385,15 @@ function Admin({ data, onAdd, error }) {
           </li>
         ))}
       </ul>
-      <h3>Recent activity</h3>
+    </div>
+  );
+}
+
+function Activity({ data }) {
+  return (
+    <div className="detail panel">
       <ul className="activity">
-        {audit.slice(0, 15).map((a, i) => (
+        {(data?.audit ?? []).slice(0, 40).map((a, i) => (
           <li key={i}>
             <span>{a.action.replaceAll("_", " ")}{a.patient_id ? ` (patient ${a.patient_id})` : ""}</span>
             <span className="muted">user {a.user_id}, {String(a.at).slice(0, 16).replace("T", " ")} UTC</span>
@@ -368,19 +467,16 @@ export default function App() {
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [risk, setRisk] = useState(null);
-  const [scores, setScores] = useState({});
-  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [mode, setMode] = useState("signin");
   const [role, setRole] = useState("patient");
   const [admin, setAdmin] = useState(null);
-  const [view, setView] = useState("app");
   const [card, setCard] = useState(null);
 
   const signOut = (msg = "") => {
-    setAuth(null); setPatients([]); setSelected(null); setRisk(null);
-    setScores({}); setQuery(""); setAdmin(null); setView("app"); setError(msg);
+    setAuth(null); setPatients([]); setSelected(null); setRisk(null); setAdmin(null); setError(msg);
+    window.location.hash = "";
   };
   const fail = (err) => { if (err.message !== "expired") setError(err.message); };
 
@@ -402,13 +498,14 @@ export default function App() {
 
   const enter = async (a) => {
     setAuth(a);
+    window.location.hash = a.role === "admin" ? "/registry" : "/";
     if (a.role === "patient") {
       setSelected(await call("/me/patient", {}, a.token));
       setRisk(await call("/me/risk", {}, a.token));
     } else if (a.role === "admin") {
       setAdmin({ licenses: await call("/admin/licenses", {}, a.token), audit: await call("/audit", {}, a.token) });
     } else {
-      setPatients(await call("/patients", {}, a.token));
+      setPatients(await call("/patients/summary", {}, a.token));
     }
   };
 
@@ -458,24 +555,25 @@ export default function App() {
     } catch (err) { fail(err); }
   };
 
-  const showModel = async () => {
-    setError("");
-    try {
-      if (!card) setCard(await call("/model"));
-      setView("model");
-    } catch (err) { fail(err); }
-  };
-
   const whatIf = (profile) => call("/whatif", { method: "POST", body: JSON.stringify(profile) });
 
-  const assess = async (p) => {
-    setSelected(p); setRisk(null); setError("");
-    try {
-      const r = await call(`/patients/${p.id}/risk`);
-      setRisk(r);
-      setScores((s) => ({ ...s, [p.id]: { score: r.score, level: r.level } }));
-    } catch (err) { fail(err); }
-  };
+  const path = useRoute();
+  const [route, qs = ""] = path.split("?");
+  const [seg, rid] = route.split("/").filter(Boolean);
+  const pid = auth?.role === "doctor" && (seg === "patients" || seg === "whatif")
+    ? (rid ? +rid : seg === "whatif" ? patients[0]?.id : null) : null;
+
+  useEffect(() => {
+    if (!pid) return;
+    let live = true;
+    setRisk(null); setError("");
+    call(`/patients/${pid}/risk`).then((r) => live && setRisk(r)).catch(fail);
+    return () => { live = false; };
+  }, [pid]);
+  useEffect(() => {
+    if (seg === "model" && auth && !card) call("/model").then(setCard).catch(fail);
+  }, [seg, auth]);
+  useEffect(() => { window.scrollTo(0, 0); }, [route]);
 
   if (!auth) {
     return (
@@ -546,66 +644,84 @@ export default function App() {
     );
   }
 
-  const list = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
-
+  const who = auth.role;
+  const patient = who === "patient" ? selected : who === "doctor" ? patients.find((p) => p.id === pid) : null;
+  const riskNow = risk && (who !== "doctor" || risk.patient_id === pid) ? risk : null;
+  const cur = seg ?? (who === "admin" ? "registry" : "");
+  const filter = new URLSearchParams(qs).get("risk") ?? "all";
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const name = auth.username[0].toUpperCase() + auth.username.slice(1);
   const glow = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
     e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
   };
-  const hour = new Date().getHours();
-  const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-  const name = auth.username[0].toUpperCase() + auth.username.slice(1);
-  const sub = view === "model" ? "How the screening model was built and tested."
-    : auth.role === "doctor" ? "Select a patient to review their screening result."
-    : auth.role === "admin" ? "Manage the doctor registry and review activity."
-    : "Here is your latest screening result.";
+
+  const NAV = {
+    doctor: [["/", "Overview", Grid], ["/patients", "Patients", Users], ["/whatif", "What-if", Sliders], ["/model", "Model", Chart]],
+    patient: [["/", "Results", Grid], ["/whatif", "What-if", Sliders], ["/model", "Model", Chart]],
+    admin: [["/registry", "Registry", Badge], ["/activity", "Activity", List], ["/model", "Model", Chart]],
+  }[who];
+
+  let page, title, sub;
+  if (seg === "model") {
+    title = "About the model"; sub = "How the screening model was built and tested.";
+    page = card ? <ModelCard card={card} /> : <p className="muted">{error || "Loading..."}</p>;
+  } else if (who === "admin") {
+    if (seg === "activity") { title = "Activity"; sub = "Recent sign-ups, sign-ins and record views."; page = <Activity data={admin} />; }
+    else { title = "Doctor registry"; sub = "Manage which doctors are allowed to sign up."; page = <Registry data={admin} onAdd={addLicense} error={error} />; }
+  } else if (seg === "whatif") {
+    title = "What-if simulator"; sub = "Change a value and watch the score respond.";
+    page = (
+      <>
+        {who === "doctor" && (
+          <label className="picker">Patient
+            <select value={pid ?? ""} onChange={(e) => go(`/whatif/${e.target.value}`)}>
+              {patients.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        )}
+        <Detail key={`w-${patient?.id}`} mode="whatif" selected={patient} risk={riskNow} error={error} onWhatIf={whatIf}
+          resultsHref={who === "doctor" ? `#/patients/${patient?.id}` : "#/"} />
+      </>
+    );
+  } else if (who === "doctor" && seg === "patients" && rid) {
+    title = "Patient record"; sub = "Screening result for this patient.";
+    page = <Detail key={`v-${patient?.id}`} mode="view" selected={patient} risk={riskNow} error={error}
+      whatIfHref={`#/whatif/${patient?.id}`} backHref="#/patients" backLabel="Back to patients" />;
+  } else if (who === "doctor" && seg === "patients") {
+    title = "Patients"; sub = "Everyone on the list, highest screening score first.";
+    page = <PatientsPage patients={patients} filter={filter} />;
+  } else if (who === "doctor") {
+    title = `Good ${part}, ${name}`; sub = "Here is how your patients look today.";
+    page = <Overview patients={patients} />;
+  } else {
+    title = `Good ${part}, ${name}`; sub = "Here is your latest screening result.";
+    page = <Detail key="mine" mode="view" selected={patient} risk={riskNow} error={error} whatIfHref="#/whatif" />;
+  }
 
   return (
     <div className="stage">
       <div className="glass" onMouseMove={glow}>
         <nav className="rail" aria-label="Main">
           <span className="logo"><Pulse /></span>
-          <button className={`rail-btn ${view === "app" ? "on" : ""}`} onClick={() => setView("app")} aria-label="Dashboard" title="Dashboard"><Grid /></button>
-          <button className={`rail-btn ${view === "model" ? "on" : ""}`} onClick={showModel} aria-label="About the model" title="About the model"><Chart /></button>
+          {NAV.map(([to, label, Icon]) => (
+            <a key={to} href={`#${to}`} className={`rail-link ${to.slice(1) === cur ? "on" : ""}`} aria-current={to.slice(1) === cur ? "page" : undefined}>
+              <Icon /><span>{label}</span>
+            </a>
+          ))}
         </nav>
         <div className="body">
           <header className="topbar">
-            <div><h1>Good {part}, {name}</h1><p className="muted">{sub}</p></div>
+            <div><h1>{title}</h1><p className="muted">{sub}</p></div>
             <div className="me">
               <span className="avatar" aria-hidden="true">{name[0]}</span>
-              <span>{auth.username} <small>({auth.role})</small></span>
+              <span>{auth.username} <small>({who})</small></span>
               <button className="ghost" onClick={() => signOut()}>Sign out</button>
             </div>
           </header>
-          <div className={`content ${auth.role === "doctor" ? "with-roster" : ""}`}>
-            {auth.role === "doctor" && (
-              <nav className="roster" aria-label="Patients">
-                <input type="search" placeholder="Search patients" value={query}
-                  onChange={(e) => setQuery(e.target.value)} aria-label="Search patients" />
-                <ul>
-                  {list.map((p, i) => {
-                    const sc = scores[p.id];
-                    return (
-                      <li key={p.id} style={{ "--i": Math.min(i, 12) }}>
-                        <button className={`row ${selected?.id === p.id ? "on" : ""}`} onClick={() => { setView("app"); assess(p); }}
-                          aria-current={selected?.id === p.id}>
-                          <span className="who"><b>{p.name}</b><small>{p.age} years, BMI {p.bmi}</small></span>
-                          <span className={`chip ${sc ? sc.level : "none"}`}>{sc ? `${Math.round(sc.score * 100)}%` : "Not assessed"}</span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {list.length === 0 && <li className="muted pad">No patients match "{query}".</li>}
-                </ul>
-              </nav>
-            )}
-            <main className="main">
-              {view === "model" ? <ModelCard card={card} />
-                : auth.role === "admin" ? <Admin data={admin} onAdd={addLicense} error={error} />
-                : <Detail key={selected?.id ?? "none"} selected={selected} risk={risk} error={error} onModel={showModel} onWhatIf={whatIf} />}
-            </main>
-          </div>
+          <div className="content"><main className="main" key={route}>{page}</main></div>
         </div>
       </div>
     </div>
@@ -620,6 +736,10 @@ const Grid = () => (
   <Svg><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" />
     <rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></Svg>
 );
+const Users = () => <Svg><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.4c2 .8 3.5 2.6 3.5 5.6" /></Svg>;
+const Sliders = () => <Svg><path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0" /><circle cx="15" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></Svg>;
+const Badge = () => <Svg><rect x="3" y="5" width="18" height="14" rx="3" /><circle cx="9" cy="11" r="2" /><path d="M6 16c.5-1.4 1.6-2 3-2s2.5.6 3 2M14.5 10h4M14.5 13h3" /></Svg>;
+const List = () => <Svg><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></Svg>;
 const Chart = () => <Svg><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></Svg>;
 
 function Pulse() {

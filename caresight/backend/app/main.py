@@ -302,3 +302,14 @@ def add_license(body: LicenseIn, user: User = Depends(require("admin")), s: Sess
 def whatif(body: Vitals, user: User = Depends(require("doctor", "patient"))):
     """Score hypothetical values for the what-if sliders. Nothing is saved."""
     return ml.predict(body.model_dump())
+
+
+@app.get("/patients/summary")
+def patients_summary(user: User = Depends(require("doctor")), s: Session = Depends(db)):
+    """Every patient with their screening score, for the overview and patient list pages."""
+    rows = s.scalars(select(Patient).order_by(Patient.id)).all()
+    scores = ml.score_many([{f: getattr(p, f) for f in ml.FEATURES} for p in rows]) if rows else []
+    cols = ("id", "name", "age", "sex", "bmi", "hba1c", "glucose", "hypertension", "heart_disease", "smoking")
+    out = [{**{c: getattr(p, c) for c in cols}, **sc} for p, sc in zip(rows, scores)]
+    log(s, user, "view_patient_list")  # log last: committing expires the loaded rows
+    return out

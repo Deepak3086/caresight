@@ -127,6 +127,15 @@ def predict(patient: dict):
     return {"score": round(score, 3), "level": level, "factors": factors[:4]}
 
 
+def score_many(patients):
+    """Score a list of patients in one model call (no explanations)."""
+    b = _load()
+    df = pd.DataFrame([{f: p[f] for f in FEATURES} for p in patients])
+    t = b["threshold"]
+    return [{"score": round(float(x), 3), "level": "high" if x >= t else "moderate" if x >= t / 2 else "low"}
+            for x in b["model"].predict_proba(df)[:, 1]]
+
+
 def model_metrics():
     return _load()["card"]
 
