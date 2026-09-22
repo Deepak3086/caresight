@@ -19,7 +19,10 @@ FastAPI, SQLAlchemy (SQLite by default, PostgreSQL via `DATABASE_URL`), scikit-l
   scores), and the alert threshold is picked on out-of-fold predictions with a recall-weighted F2.
 - **Evaluation:** ROC AUC, average precision, precision/recall at the threshold, Brier score, confusion matrix and
   permutation importance, all shown in the app under "About the model".
-- **Explanations:** per-patient change in score when one input is replaced by a typical value.
+- **Explanations:** Shapley-style per-patient explanations. Each input's contribution is its average effect on the
+  score across many random orders of revealing the patient's real values starting from a typical patient. This
+  replaced swap-one-input-at-a-time, which under-credited overlapping signals (e.g. it could show glucose as
+  contributing 0 points when HbA1c alone already explained a maxed-out score).
 - **Limits:** the dataset's origin is undocumented; the label is current diabetes status, not future risk; HbA1c and glucose
   dominate because they define the diagnosis.
 

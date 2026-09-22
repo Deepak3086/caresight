@@ -121,34 +121,52 @@ def _load():
     return _bundle
 
 
-def predict(patient: dict):
-    """Score plus the factors moving it. Each factor = change in score when that input is
-    replaced by a typical value (median, or 'no' / 'never'). Sex is used by the model
-    but never shown as a driver."""
+def predict(patient: dict, n_orderings: int = 25, seed: int = 0):
+    """Score plus the factors moving it.
+
+    Each factor's contribution is a Shapley value: the input's average effect on the score,
+    across many random orders of "revealing" the patient's real values starting from a typical
+    patient (the training medians / most common category). Averaging over orders is what makes
+    this fair when two inputs overlap, e.g. HbA1c and glucose both flag diabetes, so swapping
+    only one back to typical (the old method) made the other look like it didn't matter, even
+    though either alone is often enough to explain the whole score.
+    """
     b = _load()
     row = pd.DataFrame([{f: patient[f] for f in FEATURES}])
     score = float(b["model"].predict_proba(row)[0, 1])
-    factors = []
-    for f in FEATURES:
-        if f == "sex":
-            continue
-        alt = row.copy()
-        alt[f] = b["baseline"][f]
-        factors.append({"feature": f, "value": patient[f],
-                        "impact": round(score - float(b["model"].predict_proba(alt)[0, 1]), 3)})
+
+    others = [f for f in FEATURES if f != "sex"]  # sex affects the model but is never shown as a driver
+    rng = np.random.default_rng(seed)
+
+    # Batch every intermediate row from every ordering into one predict_proba call, instead of
+    # one call per feature revealed (which was the slow part: ~200 tiny calls per prediction).
+    rows, orderings = [], []
+    for _ in range(n_orderings):
+        order = others.copy()
+        rng.shuffle(order)
+        orderings.append(order)
+        cur = {**b["baseline"], "sex": patient["sex"]}
+        rows.append(cur.copy())  # step 0: fully baseline
+        for f in order:
+            cur = {**cur, f: patient[f]}
+            rows.append(cur.copy())
+    batch = pd.DataFrame(rows)[FEATURES]
+    scores = b["model"].predict_proba(batch)[:, 1]
+
+    totals = {f: 0.0 for f in others}
+    i = 0
+    for order in orderings:
+        prev = scores[i]; i += 1
+        for f in order:
+            new = scores[i]; i += 1
+            totals[f] += new - prev
+            prev = new
+
+    factors = [{"feature": f, "value": patient[f], "impact": round(float(totals[f]) / n_orderings, 3)} for f in others]
     factors.sort(key=lambda x: abs(x["impact"]), reverse=True)
     t = b["threshold"]
     level = "high" if score >= t else "moderate" if score >= t / 2 else "low"
     return {"score": round(score, 3), "level": level, "factors": factors[:4]}
-
-
-def score_many(patients):
-    """Score a list of patients in one model call (no explanations)."""
-    b = _load()
-    df = pd.DataFrame([{f: p[f] for f in FEATURES} for p in patients])
-    t = b["threshold"]
-    return [{"score": round(float(x), 3), "level": "high" if x >= t else "moderate" if x >= t / 2 else "low"}
-            for x in b["model"].predict_proba(df)[:, 1]]
 
 
 def model_metrics():
