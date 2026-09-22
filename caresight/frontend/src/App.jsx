@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("caresight-theme") || "dark"; } catch { return "dark"; }
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("caresight-theme", theme); } catch { /* ignore */ }
+  }, [theme]);
+  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+}
+
+const Sun = () => <Svg><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.5M12 19v2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2.5 12H5M19 12h2.5M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></Svg>;
+const Moon = () => <Svg><path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a7 7 0 0 0 10.2 10.2Z" /></Svg>;
+
+
 const API = import.meta.env.VITE_API_URL || "https://caresight.onrender.com";
 const LABELS = {
   sex: "Sex", age: "Age", bmi: "BMI", hba1c: "HbA1c", glucose: "Blood glucose",
@@ -475,6 +490,7 @@ export default function App() {
   const [risk, setRisk] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [theme, toggleTheme] = useTheme();
   const [mode, setMode] = useState("signin");
   const [role, setRole] = useState("patient");
   const [admin, setAdmin] = useState(null);
@@ -588,6 +604,8 @@ export default function App() {
 
   if (!auth) {
     return (
+      <div className="stage">
+      <Aurora />
       <div className="login-page">
         <aside>
           <div className="brand"><Pulse /> CareSight</div>
@@ -652,6 +670,7 @@ export default function App() {
           </form>
         </main>
       </div>
+      </div>
     );
   }
 
@@ -714,6 +733,7 @@ export default function App() {
 
   return (
     <div className="stage">
+      <Aurora />
       <div className="glass" onMouseMove={glow}>
         <nav className="rail" aria-label="Main">
           <span className="logo"><Pulse /></span>
@@ -729,12 +749,22 @@ export default function App() {
             <div className="me">
               <span className="avatar" aria-hidden="true">{name[0]}</span>
               <span>{auth.username} <small>({who})</small></span>
+              <button className="ghost icon" onClick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">{theme === "dark" ? <Sun /> : <Moon />}</button>
               <button className="ghost" onClick={() => signOut()}>Sign out</button>
             </div>
           </header>
           <div className="content"><main className="main" key={route}>{page}</main></div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Aurora() {
+  return (
+    <div className="aurora" aria-hidden="true">
+      <span className="blob b1" /><span className="blob b2" /><span className="blob b3" />
+      <span className="grain" />
     </div>
   );
 }
