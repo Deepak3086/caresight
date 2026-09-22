@@ -290,7 +290,7 @@ function useRoute() {
   return path;
 }
 
-function Overview({ patients }) {
+function Overview({ patients, error }) {
   const n = (l) => patients.filter((p) => p.level === l).length;
   const total = patients.length || 1;
   const top = [...patients].sort((a, b) => b.score - a.score).slice(0, 5);
@@ -298,6 +298,8 @@ function Overview({ patients }) {
     ["Moderate", n("moderate"), "moderate", "moderate"], ["Low", n("low"), "low", "low"]];
   return (
     <div className="detail">
+      {error && <p className="error" role="alert">{error}</p>}
+      {patients.length === 0 && !error && <p className="empty">No patients loaded yet.</p>}
       <section className="tiles kpis">
         {kpis.map(([label, count, cls, f], i) => (
           <a className={`tile kpi ${cls}`} key={label} style={{ "--i": i }} href={f === "all" ? "#/patients" : `#/patients?risk=${f}`}>
@@ -334,12 +336,13 @@ function Overview({ patients }) {
   );
 }
 
-function PatientsPage({ patients, filter }) {
+function PatientsPage({ patients, filter, error }) {
   const [q, setQ] = useState("");
   const rows = patients.filter((p) => (filter === "all" || p.level === filter) && p.name.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => b.score - a.score);
   return (
     <div className="detail">
+      {error && <p className="error" role="alert">{error}</p>}
       <div className="toolbar">
         <input type="search" placeholder="Search patients" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search patients" />
         <div className="segs" role="group" aria-label="Filter by risk">
@@ -361,7 +364,7 @@ function PatientsPage({ patients, filter }) {
             ))}
           </tbody>
         </table>
-        {rows.length === 0 && <p className="muted pad">No patients match.</p>}
+        {rows.length === 0 && <p className="muted pad">{patients.length === 0 ? "No patients loaded." : "No patients match."}</p>}
       </div>
     </div>
   );
@@ -543,6 +546,11 @@ export default function App() {
     finally { setBusy(false); }
   };
 
+  const reload = async () => {
+    setError("");
+    try { await enter(auth); } catch (err) { fail(err); }
+  };
+
   const addLicense = async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -695,10 +703,10 @@ export default function App() {
       whatIfHref={`#/whatif/${patient?.id}`} backHref="#/patients" backLabel="Back to patients" />;
   } else if (who === "doctor" && seg === "patients") {
     title = "Patients"; sub = "Everyone on the list, highest screening score first.";
-    page = <PatientsPage patients={patients} filter={filter} />;
+    page = <PatientsPage patients={patients} filter={filter} error={error} />;
   } else if (who === "doctor") {
     title = `Good ${part}, ${name}`; sub = "Here is how your patients look today.";
-    page = <Overview patients={patients} />;
+    page = <Overview patients={patients} error={error} />;
   } else {
     title = `Good ${part}, ${name}`; sub = "Here is your latest screening result.";
     page = <Detail key="mine" mode="view" selected={patient} risk={riskNow} error={error} whatIfHref="#/whatif" />;
