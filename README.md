@@ -3,6 +3,8 @@
 A screening demo. Patients and verified doctors sign in, and each record gets a diabetes-likelihood score with the
 inputs that moved it. **Not a diagnostic tool. Do not enter real health information.**
 
+![CareSight walkthrough](./demo.gif)
+
 **Live app:** https://caresight-sigma.vercel.app · **API docs:** https://caresight.onrender.com/docs
 
 ## Stack
