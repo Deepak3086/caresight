@@ -17,7 +17,7 @@ from sklearn.metrics import (average_precision_score, brier_score_loss, confusio
                              precision_recall_curve, roc_auc_score)
 from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_validate, train_test_split
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, SplineTransformer, StandardScaler
 
 FEATURES = ["sex", "age", "bmi", "hba1c", "glucose", "hypertension", "heart_disease", "smoking"]
 NUMERIC = ["age", "bmi", "hba1c", "glucose", "hypertension", "heart_disease"]
@@ -37,35 +37,49 @@ def load_dataset(path=DATA_PATH):
     return df[FEATURES + ["diabetes"]].drop_duplicates().reset_index(drop=True)
 
 
-def _pipeline(estimator):
-    prep = ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
-                              ("num", StandardScaler(), NUMERIC)])
+def _pipeline(estimator, spline=False):
+    cat = ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CATEGORICAL)
+    if spline:  # smooth curves for each measurement, so scores don't jump between values seen in training
+        parts = [cat, ("spl", SplineTransformer(n_knots=6, degree=3, extrapolation="constant"), ["age", "bmi", "hba1c", "glucose"]),
+                 ("flags", "passthrough", ["hypertension", "heart_disease"])]
+    else:
+        parts = [cat, ("num", StandardScaler(), NUMERIC)]
+    prep = ColumnTransformer(parts, verbose_feature_names_out=False)
+    prep.set_output(transform="pandas")  # keep column names so the boosting model can use per-feature constraints
     return make_pipeline(prep, estimator)
 
 
-def train(data_path=DATA_PATH, out=MODEL_PATH):
+def train(data_path=DATA_PATH, out=MODEL_PATH, force=None):
     df = load_dataset(data_path)
     X, y = df[FEATURES], df["diabetes"]
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-    candidates = {
-        "Logistic regression": LogisticRegression(max_iter=1000, class_weight="balanced"),
-        "Random forest": RandomForestClassifier(n_estimators=100, max_depth=12, min_samples_leaf=20,
-                                                class_weight="balanced_subsample", n_jobs=-1, random_state=42),
-        "Gradient boosting": HistGradientBoostingClassifier(random_state=42),
+    candidates = {  # name: (estimator, use spline features)
+        "Logistic regression": (LogisticRegression(max_iter=1000, class_weight="balanced"), False),
+        "Smooth logistic": (LogisticRegression(max_iter=2000, class_weight="balanced"), True),
+        "Random forest": (RandomForestClassifier(n_estimators=100, max_depth=12, min_samples_leaf=20,
+                                                 class_weight="balanced_subsample", n_jobs=-1, random_state=42), False),
+        # more risk factor never means less risk, and smaller, smoother trees than the defaults
+        "Gradient boosting": (HistGradientBoostingClassifier(
+            max_leaf_nodes=15, learning_rate=0.05, max_iter=200, min_samples_leaf=100, l2_regularization=1.0,
+            monotonic_cst={f: 1 for f in NUMERIC}, random_state=42), False),
     }
     cv = StratifiedKFold(5, shuffle=True, random_state=42)
     compared = {}
-    for name, est in candidates.items():
-        r = cross_validate(_pipeline(est), X_tr, y_tr, cv=cv, scoring=["roc_auc", "average_precision"], n_jobs=1)
+    for name, (est, spl) in candidates.items():
+        r = cross_validate(_pipeline(est, spl), X_tr, y_tr, cv=cv, scoring=["roc_auc", "average_precision"], n_jobs=1)
         compared[name] = {"roc_auc": round(float(r["test_roc_auc"].mean()), 4),
                           "avg_precision": round(float(r["test_average_precision"].mean()), 4)}
         print(f"  {name}: {compared[name]}")
-    best = max(compared, key=lambda k: compared[k]["avg_precision"])
+    # prefer the smoothest model that is within 0.01 average precision of the best (or the one you force)
+    top = max(m["avg_precision"] for m in compared.values())
+    best = force or next(n for n in ("Smooth logistic", "Logistic regression", "Gradient boosting", "Random forest")
+                         if compared[n]["avg_precision"] >= top - 0.01)
+    print(f"Selected: {best}")
 
     # calibrate so a score of 30% means roughly 30% of similar records are positive
     def calibrated():
-        return CalibratedClassifierCV(_pipeline(candidates[best]), method="isotonic", cv=3)
+        return CalibratedClassifierCV(_pipeline(*candidates[best]), method="sigmoid", cv=3)
 
     # pick the alert threshold on out-of-fold predictions (recall-weighted F2), never on the test set
     oof = cross_val_predict(calibrated(), X_tr, y_tr, cv=3, method="predict_proba")[:, 1]
@@ -84,6 +98,7 @@ def train(data_path=DATA_PATH, out=MODEL_PATH):
         "dataset": {"name": "Kaggle: Diabetes prediction dataset", "rows": int(len(df)),
                     "positive_rate": round(float(y.mean()), 4)},
         "candidates": compared, "selected": best, "threshold": round(threshold, 3),
+        "selection": "The smoothest model within 0.01 average precision of the best is used, so scores change gradually as values change.",
         "test": {"n_test": int(len(y_te)), "roc_auc": round(float(roc_auc_score(y_te, p_te)), 4),
                  "avg_precision": round(float(average_precision_score(y_te, p_te)), 4),
                  "precision": round(float(tp / max(tp + fp, 1)), 4), "recall": round(float(tp / max(tp + fn, 1)), 4),
@@ -157,4 +172,4 @@ if __name__ == "__main__":
     if not DATA_PATH.exists():
         sys.exit(f"Dataset not found at {DATA_PATH}\nDownload diabetes_prediction_dataset.csv from Kaggle first.")
     print("Training...")
-    print(train())
+    print(train(force="Smooth logistic" if "--smooth" in sys.argv else None))

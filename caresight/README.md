@@ -11,9 +11,12 @@ FastAPI, SQLAlchemy (SQLite by default, PostgreSQL via `DATABASE_URL`), scikit-l
 ## The model
 - **Data:** Kaggle "Diabetes prediction dataset" (`diabetes_prediction_dataset.csv`, about 100,000 records: sex, age, BMI,
   HbA1c, blood glucose, hypertension, heart disease, smoking). Check its license on Kaggle before republishing it.
-- **Training (`backend/app/ml.py`):** duplicates removed, stratified 80/20 split, logistic regression vs random forest vs
-  gradient boosting compared with 5-fold cross-validation on average precision (the classes are imbalanced),
-  probabilities calibrated (isotonic), and the alert threshold picked on out-of-fold predictions with a recall-weighted F2.
+- **Training (`backend/app/ml.py`):** duplicates removed, stratified 80/20 split. Four models are compared with 5-fold
+  cross-validation on average precision (the classes are imbalanced): logistic regression, a smooth logistic model
+  (spline features), random forest and a constrained gradient-boosting model. The smoothest model within 0.01 average
+  precision of the best is used, because tree models can only change at values seen in the training data, which makes
+  scores jump in steps. Probabilities are calibrated with a sigmoid (isotonic calibration produced hard 0% and 100%
+  scores), and the alert threshold is picked on out-of-fold predictions with a recall-weighted F2.
 - **Evaluation:** ROC AUC, average precision, precision/recall at the threshold, Brier score, confusion matrix and
   permutation importance, all shown in the app under "About the model".
 - **Explanations:** per-patient change in score when one input is replaced by a typical value.
@@ -26,7 +29,7 @@ cd backend
 python -m venv .venv && .venv\Scripts\activate      # Mac/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 # put diabetes_prediction_dataset.csv in backend/data/
-python -m app.ml                                     # trains, prints metrics, writes app/model.joblib
+python -m app.ml --smooth                            # trains, prints metrics, writes app/model.joblib
 uvicorn app.main:app --reload                        # http://localhost:8000/docs
 
 cd ../frontend && npm install && npm run dev         # http://localhost:5173

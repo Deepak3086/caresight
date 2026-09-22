@@ -17,7 +17,7 @@ function Gauge({ score, level }) {
       <path className="arc-track" d="M10 60 A50 50 0 0 1 110 60" />
       <path className="arc-fill" d="M10 60 A50 50 0 0 1 110 60"
         style={{ strokeDasharray: ARC, strokeDashoffset: ARC * (1 - score) }} />
-      <text x="60" y="57" textAnchor="middle" className="pct"><CountUp value={pct} />%</text>
+      <text x="60" y="57" textAnchor="middle" className="pct">{score < 0.01 || score > 0.99 ? pctText(score) : <><CountUp value={pct} />%</>}</text>
     </svg>
   );
 }
@@ -276,6 +276,7 @@ function Detail({ selected, risk, error, mode, onWhatIf, whatIfHref, resultsHref
 }
 
 const cap = (t) => t[0].toUpperCase() + t.slice(1);
+const pctText = (x) => (x < 0.01 ? "<1%" : x > 0.99 ? ">99%" : `${Math.round(x * 100)}%`);
 const go = (to) => { window.location.hash = to; };
 
 function useRoute() {
@@ -322,7 +323,7 @@ function Overview({ patients }) {
             {top.map((p) => (
               <li key={p.id}>
                 <a href={`#/patients/${p.id}`}><span className="who"><b>{p.name}</b><small>{p.age} years, HbA1c {p.hba1c}%</small></span>
-                  <span className={`chip ${p.level}`}>{Math.round(p.score * 100)}%</span></a>
+                  <span className={`chip ${p.level}`}>{pctText(p.score)}</span></a>
               </li>
             ))}
             {top.length === 0 && <li className="muted">No patients yet.</li>}
@@ -355,7 +356,7 @@ function PatientsPage({ patients, filter }) {
               <tr key={p.id} onClick={() => go(`/patients/${p.id}`)}>
                 <td><a href={`#/patients/${p.id}`}>{p.name}</a></td><td>{p.age}</td><td>{cap(p.sex)}</td>
                 <td>{p.hba1c}%</td><td>{p.glucose}</td><td>{p.bmi}</td>
-                <td><span className={`chip ${p.level}`}>{Math.round(p.score * 100)}% {p.level}</span></td>
+                <td><span className={`chip ${p.level}`}>{pctText(p.score)} {p.level}</span></td>
               </tr>
             ))}
           </tbody>
@@ -427,6 +428,7 @@ function ModelCard({ card }) {
           ))}
         </tbody>
       </table>
+      {card.selection && <p className="muted">{card.selection}</p>}
       <h3>Held-out test results ({t.n_test.toLocaleString()} records)</h3>
       <dl className="vitals">
         {[["ROC AUC", t.roc_auc], ["Average precision", t.avg_precision], ["Recall", pct(t.recall)],
@@ -456,6 +458,7 @@ function ModelCard({ card }) {
         <li>It estimates whether a record looks like a current diabetes case. It does not forecast who will develop diabetes.</li>
         <li>HbA1c and glucose dominate because they are used to diagnose diabetes, so strong scores are expected.</li>
         <li>Blood pressure, family history and other known risk factors are not in the data.</li>
+        <li>Blood glucose takes only a few distinct values in the training data, so a score can change in steps as glucose moves, not smoothly.</li>
         <li>Screening demo only. Not for medical decisions.</li>
       </ul>
     </div>
