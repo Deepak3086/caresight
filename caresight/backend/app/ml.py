@@ -36,6 +36,14 @@ def load_dataset(path=DATA_PATH):
     df = df.rename(columns={"HbA1c_level": "hba1c", "blood_glucose_level": "glucose"})
     return df[FEATURES + ["diabetes"]].drop_duplicates().reset_index(drop=True)
 
+def score_many(patients):
+    """Score a list of patients in one model call (no explanations)."""
+    b = _load()
+    df = pd.DataFrame([{f: p[f] for f in FEATURES} for p in patients])
+    t = b["threshold"]
+    return [{"score": round(float(x), 3), "level": "high" if x >= t else "moderate" if x >= t / 2 else "low"}
+            for x in b["model"].predict_proba(df)[:, 1]]
+
 
 def _pipeline(estimator, spline=False):
     cat = ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CATEGORICAL)
